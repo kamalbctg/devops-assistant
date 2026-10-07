@@ -1,0 +1,34 @@
+# UI + API + Postgres. Open http://localhost:8099 (HOST_PORT to change).
+# Connectors and agents are created in the UI and stored in Postgres;
+# their secrets are encrypted with CONNECTOR_SECRET_KEY (generated into the
+# appdata volume on first start if not set — keep that volume).
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    build: .
+    ports: ["127.0.0.1:${HOST_PORT:-8099}:8080"]   # localhost only: no user accounts yet
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: [appdata:/data]
+    environment:
+      DATABASE_URL: postgresql://agent:agent@postgres:5432/agent
+      CONNECTOR_SECRET_KEY: ${CONNECTOR_SECRET_KEY:-}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      STRICT_READ_ONLY: ${STRICT_READ_ONLY:-false}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-change-me}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+volumes:
+  pgdata:
+  appdata:

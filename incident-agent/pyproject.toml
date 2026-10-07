@@ -1,0 +1,46 @@
+[project]
+name = "incident-agent"
+version = "0.1.0"
+description = "Incident Investigation Agent built with LangGraph"
+readme = "README.md"
+authors = [
+    { name = "Kamal Hossain", email = "kamal.hossain@hishab.co" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "clickhouse-connect>=1.9.0",
+    "cryptography>=50.0.2",
+    "elasticsearch>=8.15,<9",
+    "fastapi>=0.142.2",
+    "google-auth>=2.59.1",
+    "httpx>=0.28.1",
+    "kubernetes>=36.0.3",
+    "langchain-anthropic>=1.7.5",
+    "langchain-core>=1.6.6",
+    "langgraph>=1.2.12",
+    "langgraph-checkpoint-postgres>=3.1.2",
+    "psycopg[binary,pool]>=3.3.6",
+    "pydantic>=2.13.5",
+    "requests>=2.34.2",
+    "sqlalchemy>=2.1.3",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+incident-agent = "incident_agent.api.app:main"
+
+[build-system]
+requires = ["uv_build>=0.8.11,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src/main/python"
+
+[tool.pytest.ini_options]
+testpaths = ["src/test/python"]
+pythonpath = ["src/test/python"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

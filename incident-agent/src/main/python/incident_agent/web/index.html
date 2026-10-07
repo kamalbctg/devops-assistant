@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevOps Agents</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6ea; --text: #1d2228; --muted: #6b7480;
+  --accent: #5b4bdb; --accent-soft: #eeebff;
+  --ok: #1f8a4c; --ok-soft: #e3f5ea; --warn: #b26a00; --warn-soft: #fff3dc;
+  --bad: #c62f2f; --bad-soft: #fde7e7; --info: #1769aa; --info-soft: #e4f0fb;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151a; --panel: #1a1e25; --line: #2b313a; --text: #e6e9ee; --muted: #949daa;
+    --accent: #9d92ff; --accent-soft: #2a2550;
+    --ok: #5fd08f; --ok-soft: #173325; --warn: #f0b052; --warn-soft: #3a2c12;
+    --bad: #ff7b7b; --bad-soft: #3d1b1b; --info: #6fb3f0; --info-soft: #172a3d;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 24px; padding: 0 20px; height: 54px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+header .logo { font-weight: 650; display: flex; gap: 8px; align-items: center; }
+header .logo span { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: inline-block; }
+header nav { display: flex; gap: 4px; }
+header nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
+header nav a.active, header nav a:hover { color: var(--text); background: var(--bg); }
+header .right { margin-left: auto; color: var(--muted); font-size: 12px; }
+.layout { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 54px); }
+aside { border-right: 1px solid var(--line); background: var(--panel); padding: 14px; overflow-y: auto; max-height: calc(100vh - 54px); position: sticky; top: 54px; }
+aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 4px 8px; }
+.btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:disabled { opacity: .5; cursor: default; }
+.btn.block { width: 100%; }
+.run-item { display: block; padding: 10px; border-radius: 8px; cursor: pointer; text-decoration: none; color: inherit; border: 1px solid transparent; margin-bottom: 4px; }
+.run-item:hover { background: var(--bg); }
+.run-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.run-item .q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-item .meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; margin-top: 3px; }
+main { padding: 24px 28px 60px; max-width: 1100px; width: 100%; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+.card h2 { margin: 0 0 12px; font-size: 15px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin-bottom: 18px; }
+label { display: block; font-weight: 600; margin: 12px 0 6px; }
+select, textarea, input { width: 100%; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 9px 11px; font: inherit; }
+textarea { min-height: 80px; resize: vertical; }
+.hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
+.chip:hover { color: var(--text); border-color: var(--accent); }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+.b-running { background: var(--info-soft); color: var(--info); }
+.b-waiting_input { background: var(--warn-soft); color: var(--warn); }
+.b-done, .b-HIGH, .b-supported, .b-allow, .b-root_cause_found, .b-answered { background: var(--ok-soft); color: var(--ok); }
+.b-failed, .b-LOW, .b-ruled_out, .b-deny, .b-out_of_scope { background: var(--bad-soft); color: var(--bad); }
+.b-MEDIUM, .b-open, .b-inconclusive { background: var(--warn-soft); color: var(--warn); }
+.b-src { background: var(--accent-soft); color: var(--accent); text-transform: none; }
+.run-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li { display: grid; grid-template-columns: 130px 1fr; gap: 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); }
+.steps li:last-child { border-bottom: 0; }
+.steps .node { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.steps .text { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ask { border-color: var(--warn); background: var(--warn-soft); }
+.ask .opts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
+.stat { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { font-weight: 600; margin-top: 2px; }
+.cause { font-size: 15px; padding: 12px 14px; border-left: 3px solid var(--ok); background: var(--ok-soft); border-radius: 6px; }
+.next { margin-top: 12px; padding: 12px 14px; border-left: 3px solid var(--info); background: var(--info-soft); border-radius: 6px; }
+.gap { margin-top: 12px; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+tr.ev { cursor: pointer; }
+tr.ev:hover td { background: var(--bg); }
+td.nw { white-space: nowrap; }
+tr.nq td { background: var(--bg); font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.hyp { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; }
+details summary { cursor: pointer; color: var(--muted); }
+pre.raw { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 12px; border-radius: 8px; overflow-x: auto; }
+.agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.conn { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.conn:last-child { border-bottom: 0; }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+.err { color: var(--bad); margin-top: 8px; }
+@media (max-width: 800px) {
+  .layout { grid-template-columns: 1fr; }
+  aside { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  main { padding: 16px; }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); }
+  .steps li { grid-template-columns: 1fr; gap: 2px; }
+  header .right { display: none; }
+}
+main a { color: var(--accent); }
+.toolbar { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.tile { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; cursor: pointer; color: inherit; font: inherit; }
+.tile:hover { border-color: var(--accent); }
+.tile b { display: block; margin-bottom: 4px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.checks label, .pick label { display: flex; gap: 8px; align-items: center; font-weight: 400; margin: 0; }
+.checks input, .pick input { width: auto; }
+.pick { border: 1px solid var(--line); border-radius: 8px; }
+.pick label { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; justify-content: space-between; }
+.pick label:last-child { border-bottom: 0; }
+.pick .l { display: flex; gap: 10px; align-items: center; }
+.cov { display: flex; flex-wrap: wrap; gap: 6px; }
+.row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn.small { padding: 4px 10px; font-size: 12px; }
+.btn.danger { color: var(--bad); }
+.result { margin-top: 12px; padding: 10px 14px; border-radius: 6px; }
+.result.ok { background: var(--ok-soft); border-left: 3px solid var(--ok); }
+.result.bad { background: var(--bad-soft); border-left: 3px solid var(--bad); }
+.b-untested { background: var(--bg); color: var(--muted); }
+.b-ok { background: var(--ok-soft); color: var(--ok); }
+.b-live { background: var(--info-soft); color: var(--info); }
+.b-fake { background: var(--accent-soft); color: var(--accent); }
+.list-row { display: grid; grid-template-columns: 1.4fr 1fr 1.6fr auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.list-row:last-child { border-bottom: 0; }
+textarea.mono { font-family: var(--mono); font-size: 12px; min-height: 120px; }
+@media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } .list-row { grid-template-columns: 1fr; } }
+aside { padding: 14px 10px; }
+.nav-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 8px 6px; }
+.nav-h:first-child { margin-top: 4px; }
+.nav-h button { border: 0; background: transparent; color: var(--accent); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
+.nav-group { font-size: 12px; color: var(--muted); margin: 10px 8px 4px; display: flex; gap: 6px; align-items: center; }
+.nav-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--text); text-decoration: none; }
+.nav-item:hover { background: var(--bg); }
+.nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.nav-item .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item .cnt { font-size: 11px; color: var(--muted); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.running { background: var(--info); animation: pulse 1.2s ease-in-out infinite; }
+.dot.waiting { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .3; } }
+.crumb { color: var(--muted); text-decoration: none; font-size: 13px; display: inline-block; margin-bottom: 10px; }
+.crumb:hover { color: var(--accent); }
+.agent-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.type-pill { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.runs-table .q { font-weight: 500; }
+.runs-table tr { cursor: pointer; }
+.runs-table tr:hover td { background: var(--bg); }
+.type-h { font-size: 14px; margin: 18px 0 10px; display: flex; gap: 6px; align-items: center; }
+.agent-card { cursor: pointer; margin: 0; display: flex; flex-direction: column; transition: border-color .15s; }
+.agent-card:hover { border-color: var(--accent); }
+.agent-card h2 { margin: 0 0 4px; }
+.agent-foot { margin-top: auto; padding-top: 14px; display: flex; justify-content: space-between; align-items: center; }
+.agent-foot .open { color: var(--accent); font-weight: 600; font-size: 13px; }
+.warn-t { color: var(--warn); margin-top: 6px; }
+.new-tile { border-style: dashed; min-height: 180px; display: flex; flex-direction: column; justify-content: center; }
+.dot { display: inline-block; vertical-align: 1px; }
+.rep h2 { display: flex; align-items: center; gap: 10px; }
+.sec-n { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.rep-list { margin: 0; padding-left: 20px; } .rep-list li { margin: 4px 0; }
+tr.cited td { background: var(--ok-soft); }
+.timeline { border-left: 2px solid var(--line); margin-left: 6px; padding-left: 14px; }
+.tl { display: grid; grid-template-columns: 80px 1fr; gap: 10px; padding: 5px 0; position: relative; }
+.tl::before { content: ""; position: absolute; left: -20px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+textarea.prompt-box { min-height: 420px; line-height: 1.45; }
+.af-row { display: grid; grid-template-columns: 1.1fr 0.8fr 1.4fr 2.4fr auto; gap: 8px; align-items: start; margin-top: 8px; }
+.af-row input, .af-row select { margin: 0; }
+@media (max-width: 760px) { .af-row { grid-template-columns: 1fr 1fr; } }
+.model-tag { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 8px; }
+td.bad { color: var(--bad); font-weight: 600; }
+textarea.notes-box { min-height: 160px; line-height: 1.45; }
+.tile .icon { font-size: 22px; display: block; margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#/" style="color:inherit;text-decoration:none"><span></span>DevOps Agents</a>
+  <nav><a href="/docs" target="_blank">API</a></nav>
+  <div class="right" id="health"></div>
+</header>
+<div class="layout">
+  <aside id="nav"></aside>
+  <main id="main"></main>
+</div>
+
+<script>
+// All text from the server (logs, alert titles, names) is escaped before rendering.
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const $ = id => document.getElementById(id);
+const badge = (v, cls) => `<span class="badge b-${esc(cls || v)}">${esc(String(v).replace(/_/g, " "))}</span>`;
+const modeBadge = m => badge(m === "fake" ? "demo data" : "live", m);
+const ago = t => { if (!t) return "never"; const s = Math.round(Date.now() / 1000 - t); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
+const CAP_LABEL = {"alerts.list": "alerts", "metrics.query": "metrics", "logs.search": "logs", "traces.search": "traces", "deploys.list": "deploys", "k8s.events": "pod events", "k8s.pods": "pod health"};
+const caps = list => list.map(c => CAP_LABEL[c] || c).join(", ");
+
+
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: {"content-type": "application/json"}, ...opts});
+  if (r.status === 204) return null;
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail || r.statusText));
+  return body;
+}
+const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(body || {})});
+const put = (path, body) => api(path, {method: "PUT", body: JSON.stringify(body)});
+const del = path => api(path, {method: "DELETE"});
+
+function go(hash) { location.hash = hash; }
+async function refreshConfig() { [AGENTS, CONNECTORS, LLM] = await Promise.all([api("/agents"), api("/connectors"), api("/llm")]); }
+
+
+let LLM = {models: [], efforts: []}, AGENTS = [], CONNECTORS = [], TYPES = [], AGENT_TYPES = [], RUNS = [], current = null, stream = null, activeAgent = null, navSection = null;
+const typeOf = t => AGENT_TYPES.find(x => x.type === t) || {label: t, icon: "•", examples: []};
+
+async function route() {
+  const h = location.hash || "#/";
+  if (stream) { stream.close(); stream = null; }
+  const parts = h.slice(2).split("/").filter(Boolean);
+  current = null; activeAgent = null; navSection = parts[0] || null;
+  await refreshConfig();
+  if (["run", "agent", ""].includes(parts[0] || "")) navSection = "agents";
+  if (parts[0] === "run") { await openRun(parts[1]); return renderNav(); }
+  if (parts[0] === "agent" && parts[1]) { activeAgent = parts[1]; renderNav(); return renderAgentHome(parts[1]); }
+  renderNav();
+  if (parts[0] === "connectors") {
+    if (parts[1] === "new") return parts[2] ? renderConnectorForm(null, parts[2]) : renderTypePicker();
+    if (parts[1]) return renderConnectorForm(parts[1]);
+    return renderConnectors();
+  }
+  if (parts[0] === "llm") return renderLLM();
+  if (parts[0] === "agents") {
+    if (parts[1] === "new") return parts[2] ? renderAgentForm(null, parts[2]) : renderAgentTypePicker();
+    if (parts[1] && parts[2] === "edit") return renderAgentForm(parts[1]);
+  }
+  if (!AGENTS.length && !CONNECTORS.length) return renderWelcome();
+  renderAgentCards();
+}
+
+// ------------------------------------------------------------------ left navigation
+
+async function loadRuns() {
+  try {
+    RUNS = await api("/investigations"); renderNav();
+    if (activeAgent) renderAgentRuns(activeAgent);
+    else if (navSection === "agents" && document.querySelector(".agent-card, .new-tile")) renderAgentCards();
+  } catch (e) { /* server restarting */ }
+}
+
+function renderNav() {
+  const busy = RUNS.some(r => r.status === "running") ? '<span class="dot running" title="investigation running"></span>'
+             : RUNS.some(r => r.status === "waiting_input") ? '<span class="dot waiting" title="waiting for an answer"></span>' : "";
+  const item = (key, href, label, extra) =>
+    `<a class="nav-item ${navSection === key ? "active" : ""}" href="${href}"><span class="n">${label}</span>${extra}</a>`;
+  $("nav").innerHTML =
+    item("agents", "#/agents", "🤖 Agents", busy || `<span class="cnt">${AGENTS.length}</span>`) +
+    item("connectors", "#/connectors", "🔌 Connectors", `<span class="cnt">${CONNECTORS.length}</span>`) +
+    item("llm", "#/llm", "🧠 LLM", LLM.key_set ? '<span class="cnt">✓</span>' : '<span class="cnt warn-t">not set</span>');
+}
+
+// ------------------------------------------------------------------ agents (card view)
+
+function renderAgentCards() {
+  const status = id => {
+    const r = RUNS.filter(x => x.agent_id === id);
+    if (r.some(x => x.status === "running")) return '<span class="dot running"></span> investigating';
+    if (r.some(x => x.status === "waiting_input")) return '<span class="dot waiting"></span> waiting for an answer';
+    return r.length ? `last run ${ago(r[0].created)}` : "no investigations yet";
+  };
+  $("main").innerHTML = `
+    <div class="toolbar"><div><h1>Agents</h1><div class="sub" style="margin:0">Open an agent to start an investigation.</div></div>
+      <button class="btn primary" onclick="go('#/agents/new')">+ New agent</button></div>
+    ${AGENT_TYPES.map(t => {
+      const agents = AGENTS.filter(a => a.type === t.type);
+      return `<h3 class="type-h">${esc(t.icon)} ${esc(t.label)} <span class="hint">· ${agents.length}</span></h3>
+        <div class="agents">
+          ${agents.map(a => `
+            <div class="card agent-card" data-open="${esc(a.id)}">
+              <div class="agent-head"><h2>${esc(a.name)}</h2>
+                <button class="btn small" data-edit="${esc(a.id)}">Edit</button></div>
+              ${a.description ? `<div class="hint">${esc(a.description)}</div>` : ""}
+              <div class="chips">${a.services.length ? a.services.map(x => `<span class="chip">${esc(x)}</span>`).join("") : '<span class="chip">all services</span>'}</div>
+              <div class="hint" style="margin-top:10px">🔌 ${a.connectors.map(c => esc(c.name) + (c.status === "failed" ? " " + badge("failed") : "")).join(", ")}</div>
+              <div class="hint" style="margin-top:6px">🧠 ${esc(a.llm_label)}</div>
+              ${a.not_configured.length ? `<div class="hint warn-t">Cannot check: ${esc(caps(a.not_configured))}</div>` : ""}
+              ${a.warnings.map(w => `<div class="hint warn-t">⚠ ${esc(w)}</div>`).join("")}
+              <div class="agent-foot"><span class="hint">${status(a.id)}</span><span class="open">Open →</span></div>
+            </div>`).join("")}
+          <button class="tile new-tile" onclick="go('#/agents/new/${esc(t.type)}')"><span class="icon">+</span>
+            <b>New ${esc(t.label)} agent</b><span class="hint">${esc(t.description)}</span></button>
+        </div>`;
+    }).join("")}`;
+  document.querySelectorAll("[data-open]").forEach(c => c.onclick = () => go("#/agent/" + c.dataset.open));
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = e => { e.stopPropagation(); go(`#/agents/${b.dataset.edit}/edit`); });
+}
+
+function renderWelcome() {
+  $("main").innerHTML = `<h1>Welcome</h1><div class="sub">Two steps to your first investigation.</div>
+    <div class="card"><h2>1. Add connectors</h2><p class="hint">Datadog, Elasticsearch, GKE… read-only connections to your data.</p>
+      <button class="btn" onclick="go('#/connectors/new')">Add connector</button></div>
+    <div class="card"><h2>2. Create an agent</h2><p class="hint">Pick an agent type, the services it covers and the connectors it uses.</p>
+      <button class="btn primary" onclick="go('#/agents/new')">Create agent</button></div>`;
+}
+
+// ------------------------------------------------------------------ agent page (use the agent)
+
+function renderAgentHome(id) {
+  const a = AGENTS.find(x => x.id === id);
+  if (!a) { $("main").innerHTML = '<div class="empty">Agent not found</div>'; return; }
+  const t = typeOf(a.type);
+  $("main").innerHTML = `
+    <a class="crumb" href="#/agents">← Agents</a>
+    <div class="card">
+      <div class="agent-head">
+        <div><span class="type-pill">${esc(t.icon)} ${esc(t.label)}</span>
+          <h1 style="margin-top:8px">${esc(a.name)}</h1>
+          ${a.description ? `<div class="sub" style="margin:0">${esc(a.description)}</div>` : ""}</div>
+        <button class="btn small" onclick="go('#/agents/${esc(a.id)}/edit')">Edit agent</button>
+      </div>
+      <div class="hint" style="margin-top:10px">Services: <b>${esc(a.services.length ? a.services.join(", ") : "all services the connectors see")}</b> · Connectors:
+        ${a.connectors.map(c => esc(c.name) + (c.status === "failed" ? " " + badge("failed") : "")).join(", ")}</div>
+      <details style="margin-top:8px"><summary class="hint">Instructions: ${a.prompt_is_default ? "default" : "<b>customized</b>"} — view</summary>
+        <pre class="raw">${esc(a.prompt)}</pre></details>
+      <div class="hint">Model: <b>${esc(a.llm_label)}</b>${a.llm.model !== "scripted" && !LLM.key_set ? ' · <a href="#/llm">⚠ add an Anthropic API key</a>' : ""}</div>
+      ${a.not_configured.length ? `<div class="gap">Cannot check: ${esc(caps(a.not_configured))} (no connector)</div>` : ""}
+      ${a.warnings.map(w => `<div class="gap">⚠ ${esc(w)}</div>`).join("")}
+    </div>
+    <div class="card">
+      <h2>New investigation</h2>
+      <textarea id="q" placeholder="Describe what is wrong, e.g. ${esc(t.examples[0] || "")}"></textarea>
+      <div class="chips">${t.examples.map(e => `<span class="chip" data-ex="${esc(e)}">${esc(e)}</span>`).join("")}</div>
+      <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+        <button class="btn primary" id="start">Investigate</button>
+        <span class="hint">Include the service and when it started. ⌘/Ctrl+Enter to start.</span>
+      </div>
+      <div class="err" id="err"></div>
+    </div>
+    <div class="card"><h2>Investigations</h2><div id="agentRuns"></div></div>`;
+  document.querySelectorAll("[data-ex]").forEach(c => c.onclick = () => { $("q").value = c.dataset.ex; $("q").focus(); });
+  $("q").onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start(a.id); };
+  $("start").onclick = () => start(a.id);
+  renderAgentRuns(a.id);
+}
+
+function renderAgentRuns(id) {
+  const el = $("agentRuns");
+  if (!el) return;
+  const runs = RUNS.filter(r => r.agent_id === id);
+  el.innerHTML = runs.length ? `<table class="runs-table"><thead><tr><th>Question</th><th>Status</th><th>Confidence</th><th>Source</th><th>When</th></tr></thead><tbody>
+    ${runs.map(r => `<tr onclick="go('#/run/${esc(r.id)}')"><td class="q">${esc(r.question)}</td><td>${badge(r.status)}</td>
+      <td>${r.verdict ? badge(r.verdict.confidence) : "-"}</td><td>${badge(r.source, "src")}</td><td class="hint">${ago(r.created)}</td></tr>`).join("")}
+    </tbody></table>` : '<div class="hint">No investigations yet.</div>';
+}
+
+async function start(agentId) {
+  const question = $("q").value.trim();
+  if (!question) { $("err").textContent = "Describe the problem first."; return; }
+  $("start").disabled = true;
+  try {
+    const run = await post("/investigations", {question, agent_id: agentId});
+    await loadRuns();
+    go("#/run/" + run.id);
+  } catch (e) { $("err").textContent = e.message; $("start").disabled = false; }
+}
+
+// ------------------------------------------------------------------ create / edit agent
+
+function renderAgentTypePicker() {
+  $("main").innerHTML = `<h1>New agent</h1><div class="sub">Choose the type of agent.</div>
+    <div class="tiles">${AGENT_TYPES.map(t => `<button class="tile" onclick="go('#/agents/new/${esc(t.type)}')">
+      <span class="icon">${esc(t.icon)}</span><b>${esc(t.label)}</b><span class="hint">${esc(t.description)}</span></button>`).join("")}</div>`;
+}
+
+async function renderAgentForm(id, typeName) {
+  const a = id ? AGENTS.find(x => x.id === id) : null;
+  if (id && !a) { $("main").innerHTML = '<div class="empty">Agent not found</div>'; return; }
+  if (!CONNECTORS.length) {
+    $("main").innerHTML = `<h1>New agent</h1><div class="card"><p>An agent needs at least one connector. Add one first.</p>
+      <button class="btn primary" onclick="go('#/connectors/new')">Add connector</button></div>`;
+    return;
+  }
+  const chosen = new Set(a ? a.connector_ids : []);
+  const t = typeOf(a ? a.type : typeName);
+  $("main").innerHTML = `
+    <span class="type-pill">${esc(t.icon)} ${esc(t.label)}</span>
+    <h1 style="margin-top:8px">${a ? "Edit agent" : "New agent"}</h1>
+    <div class="sub">${esc(t.description)}</div>
+    <div class="card">
+      <div class="grid2">
+        <div><label for="name">Name *</label><input id="name" value="${esc(a ? a.name : "")}" placeholder="e.g. Payments incident agent"></div>
+        <div><label for="desc">Description</label><input id="desc" value="${esc(a ? a.description : "")}"></div>
+      </div>
+    </div>
+    <div class="card"><h2>Connectors</h2>
+      <div class="pick">${CONNECTORS.map(c => `
+        <label><span class="l"><input type="checkbox" class="pc" value="${esc(c.id)}" ${chosen.has(c.id) ? "checked" : ""}>
+          <span><b>${esc(c.name)}</b> <span class="hint">${esc(c.label)}</span><br><span class="hint">${esc(caps(c.provides))}</span></span></span>
+          <span>${modeBadge(c.mode)} ${badge(c.status)}</span></label>`).join("")}</div>
+      <div class="hint" style="margin-top:6px">Need another source? <a href="#/connectors/new">Add a connector</a>.</div>
+      <label>Coverage</label><div class="cov" id="cov"></div>
+    </div>
+    <div class="card"><h2>Services</h2>
+      <div class="checks">
+        <label><input type="radio" name="svcmode" value="all" ${!a || !a.services.length ? "checked" : ""}> All services the connectors see</label>
+        <label><input type="radio" name="svcmode" value="pick" ${a && a.services.length ? "checked" : ""}> Only selected services</label>
+      </div>
+      <div id="svcPick" style="margin-top:12px">
+        <div class="row-actions" style="align-items:center"><button class="btn small" id="discover">Discover from connectors</button>
+          <span class="hint" id="discInfo">Reads service names from the chosen connectors (last 24 h).</span></div>
+        <div class="chips" id="svcList" style="margin-top:10px"></div>
+        <div style="display:flex;gap:8px;margin-top:10px"><input id="svcAdd" placeholder="Add a service name by hand"><button class="btn small" id="svcAddBtn">Add</button></div>
+      </div>
+      <div class="hint" style="margin-top:8px">The agent only investigates these services. Alerts for them start this agent automatically.</div>
+    </div>
+    <div class="card"><h2>AI model</h2><div class="grid2">
+      <div><label for="model">Reasoning model</label><select id="model">
+        ${LLM.models.map(m => `<option value="${esc(m.id)}" ${(a ? a.llm.model : "claude-opus-5-5") === m.id ? "selected" : ""}>${esc(m.label)} — ${esc(m.note)}</option>`).join("")}
+        <option value="scripted" ${a && a.llm.model === "scripted" ? "selected" : ""}>Scripted — no LLM, demo data only</option></select>
+        <div class="hint">Forms hypotheses, picks the next query, decides when to stop.</div></div>
+      <div><label for="effort">Effort</label><select id="effort">
+        ${LLM.efforts.map(e => `<option ${(a ? a.llm.effort : "medium") === e ? "selected" : ""}>${esc(e)}</option>`).join("")}</select>
+        <div class="hint">Higher = more thorough reasoning, slower and costlier.</div></div>
+      <div><label for="fast">Fast model</label><select id="fast">
+        ${LLM.models.map(m => `<option value="${esc(m.id)}" ${(a ? a.llm.fast_model : "claude-haiku-4-5") === m.id ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select>
+        <div class="hint">Reads the question (service, time, symptom).</div></div>
+    </div>
+    <div id="llmWarn"></div></div>
+    <div class="card"><h2>Instructions (prompt) <span id="pBadge"></span></h2>
+      <div class="hint" style="margin-bottom:8px">How this agent investigates — sent to the model as its system prompt. Add your team's knowledge
+        (how your services fail, which log terms matter, what “lost event” means…).</div>
+      <textarea id="prompt" class="mono prompt-box" spellcheck="false">${esc(a ? a.prompt : t.default_prompt)}</textarea>
+      <div class="row-actions" style="margin-top:8px;align-items:center">
+        <button class="btn small" id="pReset">Reset to default</button><span class="hint" id="pCount"></span></div>
+      <details style="margin-top:12px"><summary>Always added after your instructions (not editable)</summary>
+        <pre class="raw">${esc(t.safety_rules)}</pre>
+        <div class="hint">These keep the agent safe whatever the instructions say. Read-only is also enforced in code.</div></details>
+      <details style="margin-top:8px" id="srcNotes"><summary>Data source notes added from the chosen connectors</summary>
+        <div id="srcNotesBody"></div></details>
+      <details style="margin-top:8px"><summary>Also sent to the model on every turn</summary>
+        <div class="hint" style="margin-top:6px">The question · service, symptom and time window · alert details (from a link) · tools available ·
+          budget left · capabilities not configured · hypothesis board · one-line evidence summaries (never raw logs) · notes from the last turn.</div></details>
+    </div>
+    <div class="card"><h2>Post-investigation analysis <span class="hint" id="afCount"></span></h2>
+      <div class="hint" style="margin-bottom:4px">Fields filled after every investigation by the fast model, from the finished investigation —
+        like post-call analysis on a call. Shown in the report as <i>model-extracted</i>, apart from the verified sections. Values are type-checked.</div>
+      <div id="afRows"></div>
+      <div class="row-actions" style="margin-top:10px">
+        <button class="btn small" id="afAdd">+ Add field</button>
+        <button class="btn small" id="afK8s">Add Kubernetes examples</button>
+        <button class="btn small" id="afInc">Add incident examples</button></div>
+    </div>
+    <div class="card"><h2>Limits</h2><div class="grid2">
+      <div><label for="calls">Max tool calls per investigation</label><input id="calls" type="number" min="1" max="50" value="${a ? a.budget.max_tool_calls : 12}"></div>
+      <div><label for="turns">Max reasoning turns</label><input id="turns" type="number" min="1" max="30" value="${a ? a.budget.max_turns : 8}"></div>
+      <div><label for="tz">Timezone</label><input id="tz" value="${esc(a ? a.timezone : "UTC")}"><div class="hint">Used to read times like "since 10:04".</div></div>
+    </div></div>
+    <div class="card"><div class="row-actions">
+      <button class="btn primary" id="save">${a ? "Save" : "Create agent"}</button>
+      <button class="btn" onclick="history.back()">Cancel</button>
+      ${a ? '<button class="btn danger" id="delete" style="margin-left:auto">Delete agent</button>' : ""}
+    </div><div class="err" id="err"></div></div>`;
+
+  const ALL = Object.keys(CAP_LABEL);
+  const coverage = () => {
+    const ids = [...document.querySelectorAll(".pc:checked")].map(x => x.value);
+    const have = new Set(CONNECTORS.filter(c => ids.includes(c.id)).flatMap(c => c.provides));
+    $("cov").innerHTML = ALL.map(c => badge((have.has(c) ? "✓ " : "✗ ") + CAP_LABEL[c], have.has(c) ? "ok" : "MEDIUM")).join("");
+  };
+  document.querySelectorAll(".pc").forEach(x => x.onchange = coverage);
+  coverage();
+  const SEL = new Set(a ? a.services : []), FOUND = new Set();
+  const svcMode = () => document.querySelector('input[name="svcmode"]:checked').value;
+  const renderSvc = () => {
+    $("svcPick").style.display = svcMode() === "pick" ? "" : "none";
+    const all = [...new Set([...FOUND, ...SEL])].sort();
+    $("svcList").innerHTML = all.length ? all.map(x => `<label class="chip" style="cursor:pointer"><input type="checkbox" class="svc" value="${esc(x)}" ${SEL.has(x) ? "checked" : ""} style="width:auto;margin-right:6px">${esc(x)}</label>`).join("")
+      : '<span class="hint">No services yet — click Discover, or add one by hand.</span>';
+    document.querySelectorAll(".svc").forEach(x => x.onchange = () => { x.checked ? SEL.add(x.value) : SEL.delete(x.value); });
+  };
+  document.querySelectorAll('input[name="svcmode"]').forEach(r => r.onchange = renderSvc);
+  $("svcAddBtn").onclick = () => { const v = $("svcAdd").value.trim(); if (v) { SEL.add(v); $("svcAdd").value = ""; renderSvc(); } };
+  $("svcAdd").onkeydown = e => { if (e.key === "Enter") $("svcAddBtn").click(); };
+  $("discover").onclick = async () => {
+    const ids = [...document.querySelectorAll(".pc:checked")].map(x => x.value);
+    if (!ids.length) { $("discInfo").textContent = "Choose connectors first."; return; }
+    $("discInfo").innerHTML = '<span class="spinner"></span> Reading service names…';
+    try {
+      const r = await post("/services/discover", {connector_ids: ids});
+      r.services.forEach(x => FOUND.add(x));
+      $("discInfo").textContent = `Found ${r.services.length}: ` + Object.entries(r.sources).map(([k, v]) => `${k} ${typeof v === "number" ? v : "✗ " + v}`).join(" · ");
+      renderSvc();
+    } catch (e) { $("discInfo").textContent = e.message; }
+  };
+  renderSvc();
+  const llmWarn = () => {
+    const m = $("model").value, effortOk = (LLM.models.find(x => x.id === m) || {}).effort;
+    $("effort").disabled = !effortOk;
+    const live = CONNECTORS.some(c => c.mode === "live" && document.querySelector(`.pc[value="${c.id}"]`)?.checked);
+    $("llmWarn").innerHTML = m === "scripted" && live ? '<div class="gap">⚠ Scripted mode only plays the demo incident. Choose a Claude model for real data.</div>'
+      : m !== "scripted" && !LLM.key_set ? '<div class="gap">⚠ No Anthropic API key yet — <a href="#/llm">add it on the LLM page</a>.</div>' : "";
+  };
+  const pState = () => {
+    const custom = $("prompt").value.trim() !== t.default_prompt.trim();
+    $("pBadge").innerHTML = badge(custom ? "customized" : "default", custom ? "src" : "ok");
+    $("pCount").textContent = `${$("prompt").value.length.toLocaleString()} / 20,000 characters`;
+  };
+  $("prompt").oninput = pState;
+  $("pReset").onclick = () => { if ($("prompt").value.trim() === t.default_prompt.trim() || confirm("Replace your instructions with the default?")) { $("prompt").value = t.default_prompt; pState(); } };
+  pState();
+  const srcNotes = () => {
+    const chosenC = CONNECTORS.filter(c => document.querySelector(`.pc[value="${c.id}"]`)?.checked);
+    $("srcNotesBody").innerHTML = chosenC.length ? chosenC.map(c => `<div style="margin-top:8px"><b>${esc(c.name)}</b>
+      <span class="hint">${esc(c.label)} · ${c.notes_is_default ? "default notes" : "customized"} · <a href="#/connectors/${esc(c.id)}">edit</a></span>
+      <pre class="raw" style="margin:4px 0 0">${esc(c.notes)}</pre></div>`).join("") : '<div class="hint">Choose connectors above.</div>';
+  };
+  document.querySelectorAll(".pc").forEach(x => x.addEventListener("change", srcNotes));
+  srcNotes();
+  $("model").onchange = llmWarn;
+  document.querySelectorAll(".pc").forEach(x => x.addEventListener("change", llmWarn));
+  llmWarn();
+  const AF = (a ? a.analysis_fields : []).map(f => ({...f, values: (f.values || []).join(", ")}));
+  const AF_EXAMPLES = {
+    k8s: [
+      {name: "severity", type: "enum", values: "SEV1, SEV2, SEV3, none", description: "SEV1 = service down; SEV2 = degraded (pods not ready, restarts); SEV3 = errors without user impact; none = healthy"},
+      {name: "failure_type", type: "enum", values: "bad_rollout, oom, crash_app_error, image_pull, config_secret, probe, capacity, dependency, none", description: "Kind of failure, from pod state, exit codes, events and logs"},
+      {name: "affected_pods", type: "list", values: "", description: "Pod names that are not ready or restarted in the window"},
+      {name: "rollback_recommended", type: "boolean", values: "", description: "True only if a rollout correlates with the first failure"}],
+    incident: [
+      {name: "severity", type: "enum", values: "SEV1, SEV2, SEV3, none", description: "SEV1 = outage; SEV2 = degraded for many users; SEV3 = minor; none = no incident"},
+      {name: "customer_impact", type: "text", values: "", description: "Who or what is affected and how badly, with numbers from the evidence"},
+      {name: "caused_by_deploy", type: "boolean", values: "", description: "True if a deploy shortly before the first errors is the cause"},
+      {name: "dependency", type: "text", values: "", description: "Failing downstream dependency, if any (database, queue, external API); empty if none"}],
+  };
+  const afRender = () => {
+    $("afCount").textContent = AF.length ? `· ${AF.length} field${AF.length > 1 ? "s" : ""}` : "· none";
+    $("afRows").innerHTML = AF.length ? AF.map((f, i) => `<div class="af-row">
+        <input data-i="${i}" data-k="name" value="${esc(f.name)}" placeholder="name, e.g. severity" class="mono">
+        <select data-i="${i}" data-k="type">${["text", "enum", "boolean", "number", "list"].map(x => `<option ${f.type === x ? "selected" : ""}>${x}</option>`).join("")}</select>
+        <input data-i="${i}" data-k="values" value="${esc(f.values)}" placeholder="${f.type === "enum" ? "values: a, b, c" : "—"}" ${f.type === "enum" ? "" : "disabled"}>
+        <input data-i="${i}" data-k="description" value="${esc(f.description)}" placeholder="What to extract — the model reads this">
+        <button class="btn small danger" data-del="${i}" title="Remove">✕</button></div>`).join("")
+      : '<div class="hint" style="margin-top:8px">No fields. The report has only the verified sections.</div>';
+    document.querySelectorAll("#afRows [data-k]").forEach(el => {
+      el.oninput = el.onchange = () => { AF[+el.dataset.i][el.dataset.k] = el.value; if (el.dataset.k === "type") afRender(); };
+    });
+    document.querySelectorAll("#afRows [data-del]").forEach(b => b.onclick = () => { AF.splice(+b.dataset.del, 1); afRender(); });
+  };
+  const afAdd = list => { const have = new Set(AF.map(f => f.name)); list.forEach(f => have.has(f.name) || AF.push({...f})); afRender(); };
+  $("afAdd").onclick = () => { AF.push({name: "", type: "text", values: "", description: ""}); afRender(); };
+  $("afK8s").onclick = () => afAdd(AF_EXAMPLES.k8s);
+  $("afInc").onclick = () => afAdd(AF_EXAMPLES.incident);
+  afRender();
+  $("save").onclick = async () => {
+    if (svcMode() === "pick" && !SEL.size) { $("err").textContent = "Select at least one service, or choose All services."; return; }
+    const body = {type: t.type, name: $("name").value, services: svcMode() === "all" ? [] : [...SEL], description: $("desc").value, timezone: $("tz").value,
+                  connector_ids: [...document.querySelectorAll(".pc:checked")].map(x => x.value),
+                  budget: {max_tool_calls: +$("calls").value, max_turns: +$("turns").value},
+                  llm: {model: $("model").value, fast_model: $("fast").value, effort: $("effort").value},
+                  prompt: $("prompt").value,
+                  analysis_fields: AF.map(f => ({name: f.name, type: f.type, description: f.description,
+                                                 ...(f.type === "enum" ? {values: f.values.split(",").map(x => x.trim()).filter(Boolean)} : {})}))};
+    try { const saved = a ? await put(`/agents/${a.id}`, body) : await post("/agents", body); go("#/agent/" + saved.id); }
+    catch (e) { $("err").textContent = e.message; }
+  };
+  if (a) $("delete").onclick = async () => {
+    if (!confirm(`Delete agent "${a.name}"? Past investigations stay.`)) return;
+    try { await del(`/agents/${a.id}`); go("#/agents"); } catch (e) { $("err").textContent = e.message; }
+  };
+}
+
+
+// ------------------------------------------------------------------ LLM settings
+
+function renderLLM() {
+  $("main").innerHTML = `
+    <h1>LLM</h1>
+    <div class="sub">The AI that reasons during investigations. One API key for all agents; each agent picks its model.</div>
+    <div class="card">
+      <h2>Anthropic (Claude)</h2>
+      <div class="hint">Status: ${LLM.key_set ? badge("ok") + ` key ${esc(LLM.source)}` : badge("not set", "MEDIUM")}</div>
+      <label for="llmKey">API key ${LLM.key_set ? badge("saved", "ok") : ""}</label>
+      <input id="llmKey" type="password" autocomplete="new-password" placeholder="${LLM.key_set ? "Saved — paste a new key to replace" : "sk-ant-…"}">
+      <div class="hint">Stored encrypted. Create one at console.anthropic.com → API keys (best: inside a workspace).</div>
+      <label for="llmWs">Workspace ID <span class="hint">(optional)</span></label>
+      <input id="llmWs" value="${esc(LLM.workspace_id || "")}" placeholder="wrkspc_…">
+      <div class="hint">Only needed if the key is not scoped to a workspace (Console → Workspaces → copy the ID).</div>
+      <div class="row-actions" style="margin-top:14px">
+        <button class="btn" id="llmTest">Test</button><button class="btn primary" id="llmSave">Save</button></div>
+      <div id="llmResult"></div>
+    </div>
+    <div class="card"><h2>Models</h2>
+      ${LLM.models.map(m => `<div class="conn"><b>${esc(m.label)}</b><span class="hint">${esc(m.note)} · <span class="mono">${esc(m.id)}</span></span></div>`).join("")}
+      <div class="hint" style="margin-top:8px">Choose per agent: Agents → Edit → AI model.</div></div>`;
+  const show = (ok, t) => $("llmResult").innerHTML = `<div class="result ${ok ? "ok" : "bad"}">${esc(t)}</div>`;
+  $("llmTest").onclick = async () => {
+    $("llmResult").innerHTML = '<div class="hint" style="margin-top:12px"><span class="spinner"></span> Testing…</div>';
+    const r = await post("/llm/test", {api_key: $("llmKey").value, workspace_id: $("llmWs").value}).catch(e => ({ok: false, detail: e.message}));
+    show(r.ok, (r.ok ? "✓ " : "✗ ") + r.detail);
+  };
+  $("llmSave").onclick = async () => {
+    try {
+      const key = $("llmKey").value.trim(), ws = $("llmWs").value.trim();
+      const t = await post("/llm/test", {api_key: key, workspace_id: ws});
+      if (!t.ok) return show(false, "✗ " + t.detail + " — not saved");
+      await put("/llm", {api_key: key, workspace_id: ws}); route();
+    } catch (e) { show(false, e.message); }
+  };
+}
+
+// ------------------------------------------------------------------ connectors
+
+function renderConnectors() {
+  $("main").innerHTML = `
+    <div class="toolbar"><div><h1>Connectors</h1>
+      <div class="sub" style="margin:0">Connections to your data sources. Every connector must be read-only: <b>Test</b> checks that reading works and writing is refused.</div></div>
+      <button class="btn primary" onclick="go('#/connectors/new')">+ Add connector</button></div>
+    <div class="card">${CONNECTORS.length ? CONNECTORS.map(c => `
+      <div class="list-row">
+        <div><b>${esc(c.name)}</b><div class="hint">${esc(c.label)} · ${modeBadge(c.mode)}</div></div>
+        <div>${badge(c.status)}<div class="hint" title="${esc(c.status_detail)}">${esc(c.status_detail || "")}${c.tested_at ? " · " + ago(c.tested_at) : ""}</div></div>
+        <div class="hint">Provides: ${esc(caps(c.provides))}${c.used_by.length ? `<br>Used by: ${esc(c.used_by.join(", "))}` : ""}</div>
+        <div class="row-actions">
+          <button class="btn small" data-test="${esc(c.id)}">Test</button>
+          <button class="btn small" onclick="go('#/connectors/${esc(c.id)}')">Edit</button>
+          <button class="btn small danger" data-del="${esc(c.id)}">Delete</button>
+        </div>
+      </div>`).join("") : '<div class="empty">No connectors yet. Add Datadog, Elasticsearch or GKE to get started.</div>'}
+    <div class="err" id="err"></div></div>`;
+  document.querySelectorAll("[data-test]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.innerHTML = '<span class="spinner"></span>';
+    await post(`/connectors/${b.dataset.test}/test`).catch(e => $("err").textContent = e.message);
+    route();
+  });
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const c = CONNECTORS.find(x => x.id === b.dataset.del);
+    if (!confirm(`Delete connector "${c.name}"? Its saved secrets are deleted too.`)) return;
+    try { await del(`/connectors/${c.id}`); route(); } catch (e) { $("err").textContent = e.message; }
+  });
+}
+
+function renderTypePicker() {
+  $("main").innerHTML = `<h1>Add connector</h1><div class="sub">Choose the data source.</div>
+    <div class="tiles">${TYPES.map(t => `<button class="tile" onclick="go('#/connectors/new/${esc(t.type)}')">
+      <b>${esc(t.label)}</b><span class="hint">${esc(caps(t.capabilities))}</span></button>`).join("")}</div>`;
+}
+
+function fieldInput(f, value) {
+  const id = "f_" + f.key, v = value ?? f.default;
+  const req = f.required ? " *" : "";
+  let input;
+  if (f.type === "select") input = `<select id="${id}">${f.options.map(o => `<option ${o === v ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+  else if (f.type === "bool") input = `<div class="checks"><label><input type="checkbox" id="${id}" ${v ? "checked" : ""}> ${esc(f.label)}</label></div>`;
+  else if (f.type === "list") input = `<input id="${id}" value="${esc((v || []).join(", "))}" placeholder="comma separated">`;
+  else if (f.type === "json") input = `<textarea class="mono" id="${id}" placeholder="{}">${v && Object.keys(v).length ? esc(JSON.stringify(v, null, 2)) : ""}</textarea>`;
+  else input = `<input id="${id}" type="${f.type === "number" ? "number" : "text"}" value="${esc(v ?? "")}">`;
+  const label = f.type === "bool" ? "" : `<label for="${id}">${esc(f.label)}${req}</label>`;
+  return `<div>${label}${input}${f.help ? `<div class="hint">${esc(f.help)}</div>` : ""}</div>`;
+}
+
+function secretInput(s, isSet) {
+  const id = "s_" + s.key, ph = isSet ? "Saved — leave blank to keep" : (s.required ? "Required" : "Optional");
+  const input = s.multiline ? `<textarea class="mono" id="${id}" placeholder="${ph}" autocomplete="off"></textarea>`
+                            : `<input id="${id}" type="password" placeholder="${ph}" autocomplete="new-password">`;
+  return `<div><label for="${id}">${esc(s.label)}${s.required ? " *" : ""} ${isSet ? badge("saved", "ok") : ""}</label>${input}
+    ${s.help ? `<div class="hint">${esc(s.help)}</div>` : ""}</div>`;
+}
+
+async function renderConnectorForm(id, typeName) {
+  const existing = id ? await api(`/connectors/${id}`).catch(() => null) : null;
+  if (id && !existing) { $("main").innerHTML = '<div class="empty">Connector not found</div>'; return; }
+  const t = TYPES.find(x => x.type === (existing ? existing.type : typeName));
+  if (!t) { $("main").innerHTML = '<div class="empty">Unknown connector type</div>'; return; }
+  const settings = existing ? existing.settings : {};
+  const provides = existing ? existing.provides : t.capabilities;
+  $("main").innerHTML = `
+    <h1>${existing ? "Edit" : "Add"} ${esc(t.label)} connector</h1>
+    <div class="sub">${esc(t.doc.split("\n\n")[0].replace(/\s+/g, " "))}</div>
+    <div class="card">
+      <h2>General</h2>
+      <div class="grid2">
+        <div><label for="name">Name *</label><input id="name" value="${esc(existing ? existing.name : t.label + " prod")}"></div>
+        <div><label for="mode">Mode</label><select id="mode">
+          <option value="live" ${!existing || existing.mode === "live" ? "selected" : ""}>Live — connect to the real system</option>
+          <option value="fake" ${existing && existing.mode === "fake" ? "selected" : ""}>Demo data — no connection</option></select></div>
+      </div>
+      <label>Use this connector for</label>
+      <div class="checks">${t.capabilities.map(c => `<label><input type="checkbox" class="cap" value="${esc(c)}" ${provides.includes(c) ? "checked" : ""}> ${esc(CAP_LABEL[c] || c)}</label>`).join("")}</div>
+    </div>
+    <div class="card"><h2>Connection</h2><div class="grid2">${t.fields.map(f => fieldInput(f, settings[f.key])).join("")}</div></div>
+    ${t.secrets.length ? `<div class="card"><h2>Credentials</h2>
+      <div class="hint" style="margin-bottom:6px">Stored encrypted. Never shown again after saving. Read-only credentials are recommended — a key that can also write is accepted with a warning.</div>
+      <div class="grid2">${t.secrets.map(s => secretInput(s, existing && existing.secrets_set.includes(s.key))).join("")}</div></div>` : ""}
+    <div class="card"><h2>Notes for the agent <span id="nBadge"></span></h2>
+      <div class="hint" style="margin-bottom:8px">How to use this data source — added to the prompt of every agent that uses this connector.
+        Describe your data: field meanings, log line format, ID formats, what important messages look like.</div>
+      <textarea id="notes" class="mono notes-box" spellcheck="false">${esc(existing ? existing.notes : t.default_notes)}</textarea>
+      <div class="row-actions" style="margin-top:8px"><button class="btn small" id="nReset">Reset to default</button></div>
+    </div>
+    <div class="card">
+      <div class="row-actions">
+        <button class="btn" id="test">Test connection</button>
+        <button class="btn primary" id="save">${existing ? "Save" : "Save connector"}</button>
+        <button class="btn" onclick="go('#/connectors')">Cancel</button>
+      </div>
+      <div id="result"></div>
+    </div>`;
+
+  const read = () => {
+    const s = {}, sec = {};
+    t.fields.forEach(f => { const el = $("f_" + f.key); s[f.key] = f.type === "bool" ? el.checked : el.value; });
+    t.secrets.forEach(x => { const v = $("s_" + x.key).value; if (v) sec[x.key] = v; });
+    return {id: existing ? existing.id : undefined, type: t.type, name: $("name").value, mode: $("mode").value,
+            provides: [...document.querySelectorAll(".cap:checked")].map(c => c.value), settings: s, secrets: sec,
+            notes: $("notes").value};
+  };
+  const nState = () => {
+    const custom = $("notes").value.trim() !== t.default_notes.trim();
+    $("nBadge").innerHTML = badge(custom ? "customized" : "default", custom ? "src" : "ok");
+  };
+  $("notes").oninput = nState;
+  $("nReset").onclick = () => { $("notes").value = t.default_notes; nState(); };
+  nState();
+  const show = (ok, text) => $("result").innerHTML = `<div class="result ${ok ? "ok" : "bad"}">${esc(text)}</div>`;
+  $("test").onclick = async () => {
+    $("result").innerHTML = '<div class="hint" style="margin-top:12px"><span class="spinner"></span> Testing read and write access…</div>';
+    try { const r = await post("/connectors/test", read()); show(r.ok, (r.ok ? "✓ " : "✗ ") + r.detail); }
+    catch (e) { show(false, e.message); }
+  };
+  $("save").onclick = async () => {
+    try {
+      const body = read();
+      const saved = existing ? await put(`/connectors/${existing.id}`, body) : await post("/connectors", body);
+      await post(`/connectors/${saved.id}/test`);  // record status right away
+      go("#/connectors");
+    } catch (e) { show(false, e.message); }
+  };
+}
+
+
+// ------------------------------------------------------------------ run view
+
+async function openRun(id) {
+  current = id;
+  let run;
+  try { run = await api("/investigations/" + id); activeAgent = run.agent_id; } catch (e) { $("main").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  renderRun(run);
+  if (run.status === "running") follow(run);
+}
+
+function follow(run) {
+  stream = new EventSource(`/investigations/${run.id}/stream`);
+  let seen = 0;
+  stream.addEventListener("step", e => {
+    seen++;
+    if (seen <= run.events.length) return;  // already rendered from the initial fetch
+    const s = JSON.parse(e.data);
+    run.events.push(s);
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span>`;
+    $("steps").appendChild(li);
+  });
+  const finish = async () => { stream.close(); stream = null; await loadRuns(); if (current === run.id) openRun(run.id); };
+  ["done", "failed", "waiting_input"].forEach(ev => stream.addEventListener(ev, finish));
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; setTimeout(() => current === run.id && openRun(run.id), 1500); } };
+}
+
+function renderRun(run) {
+  const running = run.status === "running";
+  $("main").innerHTML = `
+    <a class="crumb" href="#/agents">Agents</a> <span class="crumb">/</span> <a class="crumb" href="#/agent/${esc(run.agent_id)}">${esc(run.agent)}</a>
+    <div class="card">
+      <div class="run-head">
+        <div><h1>${esc(run.question)}</h1>
+          <div class="sub" style="margin:0">${esc(run.agent)} · started ${ago(run.created)} ${run.source !== "chat" ? "· from " + badge(run.source, "src") : ""}</div></div>
+        <div>${running ? '<span class="spinner"></span> ' : ""}${badge(run.status)}</div>
+      </div>
+    </div>
+    ${run.status === "waiting_input" ? askCard(run) : ""}
+    ${run.status === "failed" ? `<div class="card ask"><h2>Failed</h2><div class="mono">${esc(run.error)}</div></div>` : ""}
+    ${run.verdict ? reportCards(run) : ""}
+    <div class="card">
+      <h2>Steps ${running ? '<span class="spinner"></span>' : ""}</h2>
+      <ul class="steps" id="steps">${run.events.map(s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span></li>`).join("")}</ul>
+      ${!run.events.length ? `<div class="hint">${running ? "Starting…" : "No steps finished yet."}</div>` : ""}
+    </div>
+    ${run.audit && run.audit.length ? auditCard(run) : ""}`;
+  if (run.status === "waiting_input") wireAsk(run);
+  document.querySelectorAll("tr.ev").forEach(tr => tr.onclick = () => tr.nextElementSibling.hidden = !tr.nextElementSibling.hidden);
+}
+
+function askCard(run) {
+  const i = run.interrupt || {};
+  return `<div class="card ask"><h2>${esc(i.question || "The agent needs input")}</h2>
+    <div class="opts">${(i.options || []).map(o => `<button class="btn" data-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>
+    <div style="display:flex;gap:8px;margin-top:10px"><input id="answer" placeholder="Or type an answer"><button class="btn primary" id="send">Continue</button></div>
+    <div class="err" id="askErr"></div></div>`;
+}
+
+function wireAsk(run) {
+  const send = async answer => {
+    if (!answer) return;
+    try { await api(`/investigations/${run.id}/resume`, {method: "POST", body: JSON.stringify({answer})}); openRun(run.id); loadRuns(); }
+    catch (e) { $("askErr").textContent = e.message; }
+  };
+  document.querySelectorAll("[data-answer]").forEach(b => b.onclick = () => send(b.dataset.answer));
+  $("send").onclick = () => send($("answer").value.trim());
+  $("answer").onkeydown = e => { if (e.key === "Enter") send($("answer").value.trim()); };
+}
+
+function reportCards(run) {
+  const v = run.verdict, r = (run.result || {}).report;
+  if (v.status === "out_of_scope") {
+    return `<div class="card"><h2>Refused ${badge("out_of_scope")}</h2><div>${esc(v.problems[0])}</div>
+      <div class="hint">Ask the agent that owns this service, or widen this agent's scope.</div></div>`;
+  }
+  if (!r) return `<div class="card"><pre class="raw">${esc(run.report)}</pre></div>`;  // older investigations
+  const sec = (n, title, body, extra = "") => `<div class="card rep"><h2><span class="sec-n">${n}</span>${title}${extra}</h2>${body}</div>`;
+  const list = items => items.length ? `<ul class="rep-list">${items.map(x => `<li>${x}</li>`).join("")}</ul>` : "";
+  const rc = r.root_cause, im = r.impact, cv = r.coverage, cd = r.confidence_detail;
+
+  const head = `<div class="card"><div class="summary-grid">
+      <div class="stat"><div class="k">Status</div><div class="v">${badge(v.status)}</div></div>
+      <div class="stat"><div class="k">Confidence</div><div class="v">${badge(v.confidence)}</div></div>
+      <div class="stat"><div class="k">Service</div><div class="v">${esc(im.service || "unknown")} · ${esc(im.symptom)}</div></div>
+      <div class="stat"><div class="k">Effort</div><div class="v">${esc(cv.effort.queries)} queries · ${esc(cv.effort.turns)} turns</div></div>
+    </div></div>`;
+
+  const card = (title, body, extra = "") => `<div class="card rep"><h2>${title}${extra}</h2>${body}</div>`;
+  const s1 = r.answer
+    ? sec(1, "Answer", `<div class="cause">${esc(r.answer.statement)}</div>
+       <div class="hint" style="margin-top:8px">Evidence ${esc(r.answer.evidence_ids.join(", "))} · a direct answer to the question, not a root-cause analysis</div>`)
+    : sec(1, "Root Cause", rc
+    ? `<div class="cause">${esc(rc.statement)}</div>
+       <div class="hint" style="margin-top:8px">Hypothesis: ${esc(rc.hypothesis)} · supported by <b>${esc(rc.signals.join(", "))}</b> · evidence ${esc(rc.evidence_ids.join(", "))}</div>`
+    : `<div class="gap">Not determined. ${esc(r.summary)}</div>`);
+
+  const fmt = v => v === null || v === undefined ? '<span class="hint">—</span>' : Array.isArray(v) ? (v.length ? esc(v.join(", ")) : '<span class="hint">—</span>')
+    : typeof v === "boolean" ? badge(v ? "yes" : "no", v ? "ok" : "src") : esc(String(v));
+  const sA = (r.analysis || []).length ? card("Analysis", `<table><thead><tr><th>Field</th><th>Value</th><th>Evidence</th><th>Check</th></tr></thead><tbody>
+    ${r.analysis.map(x => `<tr><td class="mono nw">${esc(x.name)}</td><td>${fmt(x.value)}</td><td class="mono nw">${esc(x.evidence_ids.join(", ")) || "—"}</td>
+      <td>${x.problems.length ? `<span class="gap" style="padding:2px 6px">⚠ ${esc(x.problems.join("; "))}</span>` : '<span class="hint">type ok</span>'}</td></tr>`).join("")}</tbody></table>`,
+    '<span class="model-tag">model-extracted · not verified like the sections below</span>') : "";
+
+  const ap = r.affected_pods;
+  const sP = ap ? card("Affected Pods", `<div class="hint" style="margin-bottom:8px">${esc(ap.ready)}/${esc(ap.total)} ready
+      ${ap.deployment ? `· deployment <b>${esc(ap.deployment.name)}</b> ${esc(ap.deployment.available)}/${esc(ap.deployment.desired)} available, ${esc(ap.deployment.updated)} updated` : ""}
+      ${ap.hpa ? `· HPA ${esc(ap.hpa.current)}→${esc(ap.hpa.desired)} (min ${esc(ap.hpa.min)}, max ${esc(ap.hpa.max)})` : ""} · evidence ${esc(ap.evidence)}</div>
+    ${ap.deployment && ap.deployment.problems.length ? `<div class="gap">${esc(ap.deployment.problems.join("; "))}</div>` : ""}
+    <table><thead><tr><th>Pod</th><th>Ready</th><th>Restarts</th><th>State</th><th>Last exit</th><th>Node</th></tr></thead><tbody>
+    ${ap.pods.map(p => `<tr><td class="mono">${esc(p.pod)}</td><td class="${p.ready ? "" : "bad"}">${p.ready ? "yes" : "NO"}</td><td>${esc(p.restarts)}</td>
+      <td class="${p.waiting ? "bad" : ""}">${esc(p.waiting || p.phase)}</td>
+      <td>${p.last_exit ? `${esc(p.last_exit.reason)} (${esc(p.last_exit.exit_code)}) at ${esc(p.last_exit.at)}${p.last_exit.recent ? " ⚠" : ""}` : "—"}</td>
+      <td class="hint">${esc(p.node || "—")}</td></tr>`).join("")}</tbody></table>`) : "";
+
+  const sH = (r.hypotheses || []).length ? card("Hypotheses", `<table><thead><tr><th>ID</th><th>Hypothesis</th><th>Status</th><th>Evidence</th></tr></thead><tbody>
+    ${r.hypotheses.map(h => `<tr><td class="mono nw">${esc(h.id)}${h.cause ? " ★" : ""}</td><td>${esc(h.statement)}</td><td>${badge(h.status)}</td>
+      <td class="mono">${esc(h.evidence_ids.join(", ")) || "—"}</td></tr>`).join("")}</tbody></table>`, ' <span class="hint">★ the cause</span>') : "";
+
+  const s2 = sec(2, "Impact", `
+    ${im.alert ? `<div class="next" style="margin-top:0;margin-bottom:10px">From alert link: <b>${esc(im.alert.name || "monitor " + im.alert.monitor_id)}</b>
+       ${im.alert.state ? badge(im.alert.state, "MEDIUM") : ""} <span class="hint">monitor ${esc(im.alert.monitor_id)} · window ${esc(im.window_from)} → ${esc(im.window_to || "now")}</span>
+       ${(im.alert.notes || []).map(n => `<div class="hint">⚠ ${esc(n)}</div>`).join("")}</div>` : ""}
+    ${im.statement ? `<p style="margin-top:0">${esc(im.statement)}</p>` : ""}
+    ${list([...im.alerts.map(x => "🔔 " + esc(x)), ...im.metrics.map(x => "📈 " + esc(x)), ...(im.pods || []).map(x => "☸ " + esc(x))])}
+    ${im.detected ? `<div class="next">Affected service detected automatically: <b>${esc(im.service)}</b> — ${esc(im.detected.reasons.join(", "))}
+       <span class="hint">(checked ${esc(im.detected.checked.join(", "))})</span></div>` : ""}
+    ${Object.keys(im.also_unusual).length ? `<div class="gap">Also unusual: ${esc(Object.entries(im.also_unusual).map(([k, x]) => k + " (" + x.join(", ") + ")").join("; "))}</div>` : ""}
+    ${!im.statement && !im.alerts.length && !im.metrics.length && !(im.pods || []).length && !im.detected ? '<div class="hint">No active alerts, rising metrics or unhealthy pods recorded.</div>' : ""}`);
+
+  const s3 = sec(3, "Summary", `<p style="margin-top:0">${esc(r.summary)}</p>
+    ${r.timeline.length ? `<div class="timeline">${r.timeline.map(x => `<div class="tl"><span class="tl-t mono">${esc(x.time)}</span>
+      <span class="tl-e">${esc(x.event)} <span class="hint">[${esc(x.evidence)}]</span></span></div>`).join("")}</div>` : ""}`);
+
+  const s4 = sec(4, "Evidence", `<table><thead><tr><th>ID</th><th>Capability</th><th>Source</th><th>Tests</th><th>Finding</th></tr></thead><tbody>
+    ${r.evidence.map(e => `<tr class="ev ${e.cited ? "cited" : ""}"><td class="mono nw">${esc(e.id)}${e.cited ? " ★" : ""}</td>
+      <td class="mono nw">${esc(e.capability)}</td><td class="nw">${esc(e.source)}</td><td class="nw">${esc(e.tests)}</td><td>${esc(e.finding)}</td></tr>
+      <tr class="nq" hidden><td colspan="5">${esc(e.query)}</td></tr>`).join("")}</tbody></table>`,
+    ' <span class="hint">★ cited for the root cause · click a row for the query</span>');
+
+  const s5 = sec(5, "Recommendations", r.recommendations.length
+    ? `<ol class="rep-list">${r.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
+       <div class="hint">The agent is read-only: it suggests, it never acts.</div>` : '<div class="hint">None.</div>');
+
+  const s6 = sec(6, "Investigation Coverage", `<div class="grid2">
+    <div><label>Checked</label><div class="cov">${cv.checked.map(x => badge("✓ " + x.capability + " · " + x.source, "ok")).join("") || "—"}</div></div>
+    <div><label>Not checked</label><div class="cov">${cv.not_checked.map(x => badge("✗ " + x, "MEDIUM")).join("") || '<span class="hint">nothing missing</span>'}</div></div>
+    <div><label>Services</label><div class="hint">${esc(cv.services_checked.filter(Boolean).join(", "))}</div></div>
+    <div><label>Effort</label><div class="hint">${esc(cv.effort.queries)} queries · ${esc(cv.effort.tool_calls)} tool calls · ${esc(cv.effort.turns)} turns · stop: ${esc(cv.effort.stop)}</div></div>
+    </div>
+    <label>Hypotheses tested</label>${cv.hypotheses.map(h => `<div class="hyp">${badge(h.status)}<span><b>${esc(h.id)}</b> ${esc(h.statement)}</span></div>`).join("") || '<div class="hint">none</div>'}
+    ${cv.connectors_skipped.length ? `<div class="gap">Connectors skipped: ${esc(cv.connectors_skipped.join("; "))}</div>` : ""}`);
+
+  const s7 = sec(7, "Confidence & Limitations", `<div style="margin-bottom:8px">${badge(cd.level)}</div>
+    ${list(cd.why.map(x => "✓ " + esc(x)))}
+    <label>Limitations</label>${list(cd.limitations.map(x => "⚠ " + esc(x)))}
+    <details style="margin-top:12px"><summary>Report as text (markdown)</summary><pre class="raw">${esc(run.report)}</pre></details>`);
+
+  return head + s1 + sA + s2 + sP + s3 + s4 + sH + s5 + s6 + s7;
+}
+
+function auditCard(run) {
+  return `<div class="card"><details><summary><b>Audit log</b> · ${run.audit.length} gateway calls</summary>
+    <table style="margin-top:10px"><thead><tr><th>Decision</th><th>Capability</th><th>Connector</th><th>Query / reason</th></tr></thead><tbody>
+    ${run.audit.map(a => `<tr><td>${badge(a.decision)}</td><td class="mono">${esc(a.capability)}</td><td>${esc(a.connector || "-")}</td>
+      <td class="mono">${esc(a.native_query || a.reason)}</td></tr>`).join("")}</tbody></table></details></div>`;
+}
+
+
+
+// ------------------------------------------------------------------ boot
+
+(async function boot() {
+  try {
+    [TYPES, AGENT_TYPES] = await Promise.all([api("/connector-types"), api("/agent-types")]);
+    $("health").textContent = "read-only agents";
+  } catch (e) { $("main").innerHTML = `<div class="empty">Cannot reach the server: ${esc(e.message)}</div>`; return; }
+  RUNS = await api("/investigations").catch(() => []);
+  window.onhashchange = route;
+  await route();
+  setInterval(loadRuns, 4000);  // running status + alert-triggered runs appear without a refresh
+})();
+</script>
+</body>
+</html>

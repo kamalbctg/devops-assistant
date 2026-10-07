@@ -1,0 +1,1087 @@
+<title>DevOps Agent Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&display=swap">
+<style>
+/* Layout: three-pane ops console — agent list | conversation | scope & audit. Stacks on narrow screens. */
+:root {
+  --bg: #eef1f4;
+  --panel: #ffffff;
+  --sunk: #f6f8fa;
+  --ink: #16202a;
+  --muted: #5a6876;
+  --line: #d9e0e7;
+  --accent: #0d6b7a;
+  --accent-ink: #ffffff;
+  --accent-soft: #dff0f2;
+  --ok: #1d7f47; --ok-soft: #e1f3e8;
+  --warn: #a35f00; --warn-soft: #fbefd9;
+  --crit: #b8322a; --crit-soft: #fbe6e3;
+  --shadow: 0 1px 2px rgba(22,32,42,.06), 0 8px 24px rgba(22,32,42,.06);
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1317; --panel: #151c21; --sunk: #11171b; --ink: #e3e9ee; --muted: #93a1ad; --line: #26313a;
+    --accent: #52b9c8; --accent-ink: #062a30; --accent-soft: #143238;
+    --ok: #52c483; --ok-soft: #142f1f; --warn: #e3a643; --warn-soft: #33270f; --crit: #f0705f; --crit-soft: #3a1b17;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1317; --panel: #151c21; --sunk: #11171b; --ink: #e3e9ee; --muted: #93a1ad; --line: #26313a;
+  --accent: #52b9c8; --accent-ink: #062a30; --accent-soft: #143238;
+  --ok: #52c483; --ok-soft: #142f1f; --warn: #e3a643; --warn-soft: #33270f; --crit: #f0705f; --crit-soft: #3a1b17;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); }
+* { box-sizing: border-box; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { display: grid; grid-template-columns: 250px minmax(0,1fr) 330px; height: 100%; }
+
+/* ---------- nav ---------- */
+.nav { background: var(--sunk); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 14px; }
+.brand-mark { width: 28px; height: 28px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 600 13px var(--f-mono); }
+.brand b { font: 600 17px var(--f-display); letter-spacing: .01em; }
+.eyebrow { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.nav .eyebrow { padding: 8px 18px 6px; }
+.agents { list-style: none; margin: 0; padding: 0 10px; display: grid; gap: 2px; overflow-y: auto; }
+.agent-btn { width: 100%; text-align: left; border: 0; background: transparent; padding: 9px 10px; border-radius: var(--r); display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; }
+.agent-btn:hover { background: var(--panel); }
+.agent-btn[aria-current="true"] { background: var(--panel); box-shadow: var(--shadow); }
+.agent-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); grid-row: span 2; }
+.agent-btn .nm { font-weight: 500; line-height: 1.3; }
+.agent-btn .kd { grid-column: 2; font-size: 12px; color: var(--muted); }
+.badge { grid-row: span 2; font: 500 11px var(--f-mono); background: var(--warn-soft); color: var(--warn); border-radius: 99px; padding: 1px 7px; }
+.new-agent { margin: 12px 10px; border: 1px dashed var(--line); background: transparent; border-radius: var(--r); padding: 10px; color: var(--accent); font-weight: 500; }
+.new-agent:hover { border-color: var(--accent); background: var(--accent-soft); }
+.nav-foot { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+.nav-foot b { color: var(--warn); font-weight: 600; }
+
+/* ---------- chat ---------- */
+.chat { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--panel); }
+.chat-head { display: flex; align-items: center; gap: 14px; padding: 14px 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.chat-head h1 { font: 600 22px/1.2 var(--f-display); margin: 0; text-wrap: balance; }
+.chat-head .sub { color: var(--muted); font-size: 13px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; border-radius: 99px; padding: 3px 9px; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.crit { background: var(--crit-soft); color: var(--crit); }
+.pill.neutral { background: var(--sunk); color: var(--muted); border: 1px solid var(--line); }
+.scope-close { display: none; align-self: flex-end; }
+.scope-toggle { margin-left: auto; display: none; border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 6px 12px; }
+
+.thread { flex: 1; overflow-y: auto; padding: 22px 24px 10px; display: flex; flex-direction: column; gap: 16px; }
+.msg { max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
+.msg .who { font: 500 11px var(--f-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-radius: 14px 14px 4px 14px; padding: 9px 14px; }
+.msg.agent .bubble { background: var(--sunk); border: 1px solid var(--line); border-radius: 4px 14px 14px 14px; padding: 12px 16px; }
+.bubble p { margin: 0 0 8px; } .bubble p:last-child { margin: 0; }
+.bubble ul { margin: 4px 0 8px; padding-left: 18px; }
+.bubble h3 { font: 600 15px var(--f-display); margin: 4px 0 6px; letter-spacing: .01em; }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px; }
+
+.steps { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--panel); }
+.steps-head { padding: 8px 14px; background: var(--sunk); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.step { display: grid; grid-template-columns: 20px 118px minmax(0,1fr); gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); align-items: start; }
+.step:first-of-type { border-top: 0; }
+.step .ic { width: 16px; height: 16px; border-radius: 50%; margin-top: 2px; display: grid; place-items: center; font-size: 10px; }
+.step.done .ic { background: var(--ok-soft); color: var(--ok); }
+.step.run .ic { border: 2px solid var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; }
+.step.wait .ic { border: 1.5px solid var(--line); }
+.step .tool { font: 500 11.5px var(--f-mono); color: var(--accent); padding-top: 1px; }
+.step .res { color: var(--muted); font-size: 12.5px; font-family: var(--f-mono); }
+.step.wait { opacity: .55; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.act { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r); padding: 7px 12px; display: inline-flex; align-items: center; gap: 8px; text-align: left; }
+.act:hover:not(:disabled) { border-color: var(--accent); }
+.act:disabled { cursor: not-allowed; opacity: .75; }
+.act small { font: 500 10.5px var(--f-mono); text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px; border-radius: 99px; }
+.act small.warn { background: var(--warn-soft); color: var(--warn); }
+.act small.crit { background: var(--crit-soft); color: var(--crit); }
+
+.approval { border: 1px solid var(--warn); border-left-width: 4px; border-radius: var(--r); background: var(--panel); padding: 14px 16px; display: grid; gap: 10px; max-width: 560px; }
+.approval.approved { border-color: var(--ok); }
+.approval.rejected { border-color: var(--line); opacity: .8; }
+.approval dl { display: grid; grid-template-columns: 110px minmax(0,1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
+.approval dt { color: var(--muted); }
+.approval dd { margin: 0; }
+.btn { border-radius: var(--r); padding: 8px 16px; font-weight: 500; border: 1px solid var(--line); background: var(--panel); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.refuse { border: 1px solid var(--crit); border-left-width: 4px; border-radius: var(--r); padding: 12px 16px; background: var(--crit-soft); max-width: 640px; }
+.refuse b { color: var(--crit); }
+
+.composer { border-top: 1px solid var(--line); padding: 12px 24px 16px; display: grid; gap: 10px; }
+.suggest { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--sunk); border-radius: 99px; padding: 4px 11px; font-size: 12.5px; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.input-row { display: flex; gap: 8px; }
+.input-row input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--sunk); border-radius: var(--r); padding: 10px 14px; }
+.input-row input:focus { outline: none; border-color: var(--accent); background: var(--panel); }
+.hint { font-size: 12px; color: var(--muted); }
+
+/* ---------- scope ---------- */
+.scope { border-left: 1px solid var(--line); background: var(--sunk); overflow-y: auto; padding: 18px 18px 24px; display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+.scope h2 { font: 600 16px var(--f-display); margin: 0; }
+.blk { display: grid; gap: 8px; }
+.blk p { margin: 0; color: var(--muted); }
+.infra { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.infra li { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; font: 12.5px var(--f-mono); display: flex; gap: 8px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+.infra li::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font: 12px var(--f-mono); border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 2px 8px; }
+.caps { list-style: none; margin: 0; padding: 0; display: grid; }
+.caps li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); align-items: center; }
+.caps li:last-child { border-bottom: 0; }
+.mode { font: 500 10.5px var(--f-mono); text-transform: uppercase; letter-spacing: .05em; padding: 2px 7px; border-radius: 99px; white-space: nowrap; }
+.mode.allow { background: var(--ok-soft); color: var(--ok); }
+.mode.approve { background: var(--warn-soft); color: var(--warn); }
+.mode.block { background: var(--crit-soft); color: var(--crit); }
+.boundary { border: 1.5px dashed var(--line); border-radius: var(--r); padding: 10px 12px; font-size: 12.5px; color: var(--muted); }
+.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.log li { display: grid; grid-template-columns: 44px minmax(0,1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.log time { font: 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .k-approve { color: var(--warn); } .log .k-change { color: var(--ok); } .log .k-deny { color: var(--crit); }
+
+/* ---------- wizard ---------- */
+.modal { position: fixed; inset: 0; background: rgba(10,16,20,.45); display: grid; place-items: center; padding: 16px; z-index: 20; }
+.dialog { background: var(--panel); border-radius: 12px; width: min(680px, 100%); max-height: calc(100% - 32px); display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+.dialog header { padding: 18px 22px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 12px; }
+.dialog header h2 { margin: 0; font: 600 20px var(--f-display); }
+.stepper { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; flex-wrap: wrap; }
+.stepper li { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.stepper li span { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font: 500 11px var(--f-mono); }
+.stepper li.on { color: var(--ink); font-weight: 500; }
+.stepper li.on span { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.stepper li.done span { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.stepper li + li::before { content: ""; width: 16px; height: 1px; background: var(--line); }
+.dialog .body { padding: 18px 22px; overflow-y: auto; display: grid; gap: 16px; }
+.field { display: grid; gap: 6px; }
+.field label, .field .lbl { font-weight: 500; }
+.field input[type=text], .field textarea { border: 1px solid var(--line); background: var(--sunk); border-radius: var(--r); padding: 9px 12px; width: 100%; }
+.field textarea { min-height: 70px; resize: vertical; }
+.tpls { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.tpl { border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; text-align: left; background: var(--panel); display: grid; gap: 2px; }
+.tpl b { font-weight: 500; } .tpl span { font-size: 12px; color: var(--muted); }
+.tpl[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.res-list { display: grid; gap: 6px; }
+.res-list label { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: var(--r); padding: 9px 12px; font: 13px var(--f-mono); }
+.cap-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.seg button { border: 0; background: var(--panel); padding: 5px 10px; font-size: 12px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"].allow { background: var(--ok-soft); color: var(--ok); font-weight: 500; }
+.seg button[aria-pressed="true"].approve { background: var(--warn-soft); color: var(--warn); font-weight: 500; }
+.seg button[aria-pressed="true"].block { background: var(--crit-soft); color: var(--crit); font-weight: 500; }
+.dialog footer { padding: 14px 22px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; }
+.review { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 8px 14px; margin: 0; }
+.review dt { color: var(--muted); } .review dd { margin: 0; }
+.err { color: var(--crit); font-size: 12.5px; }
+.cmd { position: relative; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r); min-width: 0; }
+.cmd pre { margin: 0; padding: 12px 14px; padding-top: 40px; overflow-x: auto; font: 12px/1.55 var(--f-mono); white-space: pre; max-height: 260px; }
+.cmd .copy { position: absolute; top: 6px; right: 6px; padding: 4px 10px; font-size: 12px; }
+.conn li { align-items: flex-start; } .conn li::before { margin-top: 6px; } .conn b { font-family: var(--f-body); font-weight: 500; }
+.step code.q { display: inline-block; margin-top: 3px; padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; overflow-wrap: anywhere; }
+.act small.ok { background: var(--ok-soft); color: var(--ok); }
+.bubble blockquote { margin: 8px 0 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--panel); border-radius: 0 6px 6px 0; }
+.srcbox { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.srcbox .row { justify-content: space-between; }
+.src { border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 10px; min-width: 0; }
+.src.off { background: var(--sunk); }
+.src-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.src-head label { display: flex; gap: 8px; align-items: center; font-weight: 500; }
+.src .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.src input[type=text], .src input[type=password], .src select { border: 1px solid var(--line); background: var(--sunk); border-radius: var(--r); padding: 8px 10px; width: 100%; font-family: var(--f-mono); font-size: 12.5px; }
+.src .checks { display: grid; gap: 3px; font-size: 12.5px; }
+.src .checks div { display: flex; gap: 8px; } .src .checks .wait { opacity: .5; }
+.src .checks span:first-child { flex: none; width: 16px; color: var(--ok); }
+.hint { font-size: 12px; color: var(--muted); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1150px) {
+  .app { grid-template-columns: 230px minmax(0,1fr); }
+  .scope-toggle, .scope-close { display: inline-block; }
+  .scope { position: fixed; top: 0; right: 0; bottom: 0; width: min(360px, 92vw); z-index: 10; box-shadow: var(--shadow); transform: translateX(105%); transition: transform .2s ease; padding-top: calc(18px + env(safe-area-inset-top, 0px)); }
+  .scope.open { transform: none; }
+}
+@media (max-width: 720px) {
+  html, body { height: auto; }
+  .app { display: block; height: auto; }
+  .nav { border-right: 0; border-bottom: 1px solid var(--line); }
+  .brand { padding: 14px 16px 8px; }
+  .nav .eyebrow { display: none; }
+  .agents { display: flex; overflow-x: auto; padding: 0 16px 10px; gap: 6px; }
+  .agent-btn { width: auto; white-space: nowrap; background: var(--panel); border: 1px solid var(--line); }
+  .agent-btn .kd { display: none; }
+  .agent-btn .dot, .badge { grid-row: auto; }
+  .new-agent { margin: 0 16px 12px; width: calc(100% - 32px); }
+  .nav-foot { display: none; }
+  .chat-head, .thread, .composer { padding-left: 16px; padding-right: 16px; }
+  .thread { overflow: visible; }
+  .step { grid-template-columns: 20px minmax(0,1fr); }
+  .step .res { grid-column: 2; }
+  .approval dl, .review { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition: none !important; } }
+</style>
+
+<div class="app">
+  <aside class="nav" aria-label="Agents">
+    <div class="brand"><div class="brand-mark">&gt;_</div><b>Agent Console</b></div>
+    <div class="eyebrow">Your agents</div>
+    <ul class="agents" id="agentList"></ul>
+    <button class="new-agent" id="newAgent">+ New agent</button>
+    <div class="nav-foot"><span>Pending approvals</span><b id="pendingCount">0</b></div>
+  </aside>
+
+  <main class="chat">
+    <div class="chat-head">
+      <div>
+        <h1 id="agentName"></h1>
+        <div class="sub" id="agentKind"></div>
+      </div>
+      <span class="pill ok" id="agentStatus">● Ready</span>
+      <button class="scope-toggle" id="scopeToggle" aria-controls="scope" aria-expanded="false">Scope &amp; permissions</button>
+    </div>
+    <div class="thread" id="thread" aria-live="polite"></div>
+    <form class="composer" id="composer">
+      <div class="suggest" id="suggest"></div>
+      <div class="input-row">
+        <input id="prompt" type="text" autocomplete="off" placeholder="Ask this agent about its infrastructure…" aria-label="Message">
+        <button class="btn primary" type="submit">Send</button>
+      </div>
+      <div class="hint">Sample UI with scripted responses. The agent only acts inside the scope shown on the right.</div>
+    </form>
+  </main>
+
+  <aside class="scope" id="scope" aria-label="Agent scope"></aside>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="wizTitle">
+    <header>
+      <h2 id="wizTitle">Create agent</h2>
+      <ol class="stepper" id="stepper"></ol>
+    </header>
+    <div class="body" id="wizBody"></div>
+    <footer>
+      <button class="btn" id="wizBack" type="button">Cancel</button>
+      <button class="btn primary" id="wizNext" type="button">Next</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sleep = ms => new Promise(r => setTimeout(r, reduce ? 60 : ms));
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let clock = 10 * 60 + 43;
+const now = () => { const h = Math.floor(clock / 60), m = clock % 60; clock++; return `${h}:${String(m).padStart(2, '0')}`; };
+
+/* ---------- templates (capabilities carry keywords + scripted behaviour) ---------- */
+const TEMPLATES = {
+  k8s: {
+    label: 'Kubernetes', blurb: 'Manage a GKE cluster', kind: 'GCP · Kubernetes',
+    resources: ['GKE cluster: prod-gke-eu1', 'GKE cluster: staging-gke-eu1'],
+    tools: ['Kubernetes', 'Cloud Logging', 'Cloud Monitoring'],
+    caps: [
+      { label: 'View workloads', mode: 'allow', kw: ['unhealthy', 'pod', 'workload', 'show', 'list', 'status'], tool: 'Kubernetes', read: 'pods' },
+      { label: 'View logs', mode: 'allow', kw: ['log'], tool: 'Cloud Logging', read: 'logs' },
+      { label: 'View events', mode: 'allow', kw: ['event'], tool: 'Kubernetes', read: 'events' },
+      { label: 'Scale deployments', mode: 'approve', kw: ['scale', 'replica'], tool: 'Kubernetes', act: 'scale' },
+      { label: 'Restart workloads', mode: 'approve', kw: ['restart'], tool: 'Kubernetes', act: 'restart' },
+      { label: 'Delete cluster', mode: 'block', kw: ['delete', 'destroy'] },
+      { label: 'Modify cluster networking', mode: 'block', kw: ['network', 'firewall', 'ingress', 'load balancer'] },
+    ],
+    missing: [['deploy', 'Deploying new versions'], ['rollback', 'Rolling back releases']],
+    outside: [['staging', 'Staging GKE cluster'], ['aws', 'AWS'], ['ec2', 'AWS EC2'], ['database', 'Databases']],
+    suggest: ['Show me unhealthy pods', 'Why is payment-service failing?', 'Scale payment-service to 5 replicas', 'Deploy the latest version', 'Delete the cluster'],
+  },
+  vm: {
+    label: 'Virtual machines', blurb: 'Manage AWS EC2', kind: 'AWS · EC2 · Network · Storage',
+    resources: ['AWS account acme-prod · eu-west-1', 'AWS account acme-dev · eu-west-1'],
+    tools: ['EC2', 'VPC', 'EBS', 'CloudWatch'],
+    caps: [
+      { label: 'View instances & disks', mode: 'allow', kw: ['show', 'list', 'disk', 'usage', 'cpu', 'instance'], tool: 'EC2', read: 'disks' },
+      { label: 'Start / stop instances', mode: 'approve', kw: ['start', 'stop', 'reboot'], tool: 'EC2', act: 'power' },
+      { label: 'Resize instances', mode: 'approve', kw: ['resize', 'bigger', 'type'], tool: 'EC2', act: 'resize' },
+      { label: 'Terminate instances', mode: 'block', kw: ['terminate', 'delete', 'destroy'] },
+      { label: 'Change security groups', mode: 'block', kw: ['security group', 'firewall', 'port'] },
+    ],
+    missing: [],
+    outside: [['gcp', 'GCP'], ['gke', 'GKE clusters'], ['kubernetes', 'Kubernetes']],
+    suggest: ['Show disk usage on web VMs', 'Restart web-03', 'Resize web-03 to m6i.large', 'Terminate web-05'],
+  },
+  db: {
+    label: 'Database', blurb: 'Provision & monitor Cloud SQL', kind: 'GCP · Cloud SQL',
+    resources: ['Cloud SQL: orders-db', 'Cloud SQL: billing-db'],
+    tools: ['Cloud SQL Admin', 'Query Insights', 'Backups'],
+    caps: [
+      { label: 'Monitor instances', mode: 'allow', kw: ['slow', 'query', 'cpu', 'connection', 'status', 'show', 'monitor'], tool: 'Query Insights', read: 'queries' },
+      { label: 'Provision databases', mode: 'approve', kw: ['create', 'provision', 'new'], tool: 'Cloud SQL Admin', act: 'create' },
+      { label: 'Run on-demand backups', mode: 'approve', kw: ['backup'], tool: 'Backups', act: 'backup' },
+      { label: 'Delete databases', mode: 'block', kw: ['delete', 'drop'] },
+      { label: 'Read table data', mode: 'block', kw: ['select', 'rows', 'customer', 'table data'] },
+    ],
+    missing: [],
+    outside: [['aws', 'AWS'], ['kubernetes', 'Kubernetes'], ['pod', 'Kubernetes workloads']],
+    suggest: ['Show slow queries on orders-db', 'Create a staging Postgres DB', 'Run a backup of billing-db', 'Drop the orders table'],
+  },
+  inc: {
+    label: 'Investigation', blurb: 'Read-only root-cause analysis', kind: 'Read-only · Datadog · Elasticsearch · Kubernetes',
+    resources: ['Datadog: acme org (datadoghq.eu)', 'Elasticsearch: app-logs-*, nginx-*', 'GKE cluster: prod-gke-eu1 (read)'],
+    tools: ['Datadog', 'Elasticsearch', 'Kubernetes (read)'],
+    caps: [
+      { label: 'Query Datadog metrics & APM traces', mode: 'allow', kw: ['metric', 'latency', 'apm', 'trace', 'p95', 'datadog', 'cpu', 'memory'], read: 'dd' },
+      { label: 'Read Datadog monitors & events', mode: 'allow', kw: ['monitor', 'alert', 'event', 'deploy', 'release'], read: 'ddmon' },
+      { label: 'Search Elasticsearch logs', mode: 'allow', kw: ['log', 'error', 'exception', 'elastic', 'stack'], read: 'es' },
+      { label: 'Read Kubernetes state', mode: 'allow', kw: ['pod', 'unhealthy', 'kubernetes', 'oom', 'node'], read: 'pods' },
+      { label: 'Mute monitors / create downtimes', mode: 'block', kw: ['mute', 'silence', 'downtime', 'snooze'] },
+      { label: 'Write or delete log indices', mode: 'block', kw: ['delete index', 'delete log', 'reindex', 'purge'] },
+      { label: 'Any infrastructure change', mode: 'block', kw: ['scale', 'restart', 'redeploy', 'rollback', 'roll back', 'delete', 'fix it'] },
+    ],
+    missing: [],
+    outside: [['aws', 'AWS'], ['staging', 'Staging environment'], ['sentry', 'Sentry'], ['pagerduty', 'PagerDuty'], ['prometheus', 'Prometheus']],
+    suggest: ['Checkout is slow since 10:04 — investigate', 'Show payment-service errors in Elasticsearch', 'Which monitors are alerting?', 'What was deployed in the last hour?', 'Mute the checkout monitor', 'Restart payment-service'],
+  },
+};
+
+/* ---------- cloud connection: how each capability maps to cloud permissions ---------- */
+const PLATFORM = { gcp: 'agents@agent-platform.iam.gserviceaccount.com', aws: 'arn:aws:iam::111122223333:role/agent-platform' };
+const CLOUD = {
+  k8s: { provider: 'gcp', base: ['roles/monitoring.viewer'], discover: '2 GKE clusters found',
+    custom: { agentWorkloadOperator: ['container.deployments.get', 'container.deployments.update'] },
+    map: { 'View workloads': ['roles/container.viewer'], 'View logs': ['roles/logging.viewer'], 'View events': ['roles/container.viewer'],
+      'Scale deployments': ['custom:agentWorkloadOperator'], 'Restart workloads': ['custom:agentWorkloadOperator'],
+      'Delete cluster': ['container.clusters.delete'], 'Modify cluster networking': ['container.clusters.update', 'compute.networks.update'] } },
+  db: { provider: 'gcp', base: ['roles/monitoring.viewer'], discover: '2 Cloud SQL instances found',
+    custom: { agentDbProvisioner: ['cloudsql.instances.create', 'cloudsql.databases.create'], agentDbBackup: ['cloudsql.backupRuns.create'] },
+    map: { 'Monitor instances': ['roles/cloudsql.viewer'], 'Provision databases': ['custom:agentDbProvisioner'], 'Run on-demand backups': ['custom:agentDbBackup'],
+      'Delete databases': ['cloudsql.instances.delete', 'cloudsql.databases.delete'], 'Read table data': ['cloudsql.instances.login'] } },
+  inc: { provider: 'multi', base: [], custom: {}, map: {} }, // connects several data sources, see SOURCES
+  vm: { provider: 'aws', base: ['ec2:DescribeInstances'], discover: '6 EC2 instances in eu-west-1',
+    map: { 'View instances & disks': ['ec2:DescribeInstances', 'ec2:DescribeVolumes', 'cloudwatch:GetMetricData'],
+      'Start / stop instances': ['ec2:StartInstances', 'ec2:StopInstances', 'ec2:RebootInstances'], 'Resize instances': ['ec2:ModifyInstanceAttribute'],
+      'Terminate instances': ['ec2:TerminateInstances'], 'Change security groups': ['ec2:AuthorizeSecurityGroupIngress', 'ec2:ModifySecurityGroupRules'] } },
+};
+function grantsFor(tpl, caps) {
+  const c = CLOUD[tpl], granted = new Set(c.base), withheld = new Set();
+  for (const cap of caps) for (const g of (c.map[cap.label] || [])) (cap.mode === 'block' ? withheld : granted).add(g);
+  return { granted: [...granted], withheld: [...withheld] };
+}
+const slug = s => (s || 'agent').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 17).replace(/-$/, '');
+function defaultConn(tpl, name) {
+  const p = CLOUD[tpl].provider, sl = slug(name);
+  return p === 'gcp'
+    ? { provider: p, project: 'acme-prod', ident: `devops-agent-${sl}@acme-prod.iam.gserviceaccount.com`, sa: `devops-agent-${sl}`, tested: false, testing: false, checks: [] }
+    : { provider: p, project: '482910375561', ident: `arn:aws:iam::482910375561:role/devops-agent-${sl}`, sa: `devops-agent-${sl}`, ext: 'ext-7f3a9c21', tested: false, testing: false, checks: [] };
+}
+
+/* ---------- data sources for the Incident Investigation Agent (read-only by design) ---------- */
+const SOURCES = {
+  datadog: { name: 'Datadog', method: 'API key + scoped application key', ident: 'application key "devops-agent-incident" · service account sre-agent',
+    grants: ['metrics_read', 'timeseries_query', 'apm_read', 'logs_read_data', 'monitors_read', 'events_read'],
+    never: ['monitors_write', 'monitors_downtime', 'dashboards_write', 'logs_write_archives'] },
+  es: { name: 'Elasticsearch', method: 'API key with read-only role', ident: 'API key "devops-agent-incident" · expires in 90 days',
+    grants: ['read: app-logs-*', 'read: nginx-*', 'view_index_metadata'], never: ['write', 'delete', 'manage', 'any other index'] },
+  gke: { name: 'Kubernetes', method: 'GCP service account impersonation', ident: 'devops-agent-incident@acme-prod.iam.gserviceaccount.com',
+    grants: ['roles/container.viewer'], never: ['container.deployments.update', 'container.pods.delete'] },
+};
+const MORE_SOURCES = ['Prometheus', 'Grafana Loki', 'Sentry', 'PagerDuty', 'CloudWatch'];
+
+const clone = o => JSON.parse(JSON.stringify(o));
+function makeAgent(id, name, tpl, purpose, resources, caps, conn) {
+  const t = TEMPLATES[tpl];
+  return { id, name, tpl, kind: t.kind, purpose, resources, tools: t.tools.slice(), caps: caps || clone(t.caps), conn, replicas: 3, thread: [], log: [] };
+}
+
+const S = { agents: [], current: null, busy: false };
+const gke = makeAgent('gke', 'Production GKE Agent', 'k8s', 'Operate and troubleshoot production workloads on the GKE cluster.', ['GCP project: acme-prod', 'GKE cluster: prod-gke-eu1']);
+const aws = makeAgent('aws', 'AWS Agent', 'vm', 'Look after the production EC2 fleet: health, disks, sizing.', ['AWS account acme-prod · eu-west-1']);
+const dbA = makeAgent('db', 'Database Agent', 'db', 'Provision and monitor Cloud SQL databases.', ['Cloud SQL: orders-db', 'Cloud SQL: billing-db']);
+const inc = makeAgent('inc', 'Incident Investigation Agent', 'inc', 'Find root causes during incidents using Datadog, Elasticsearch and Kubernetes. Never changes anything.', TEMPLATES.inc.resources.slice());
+gke.conn = { method: 'GCP service account impersonation', identity: 'devops-agent-gke@acme-prod.iam.gserviceaccount.com', verified: 'Oct 4, 09:12' };
+aws.conn = { method: 'AWS IAM role · AssumeRole + external ID', identity: 'arn:aws:iam::482910375561:role/devops-agent-aws', verified: 'Oct 2, 16:40' };
+dbA.conn = { method: 'GCP service account impersonation', identity: 'devops-agent-db@acme-prod.iam.gserviceaccount.com', verified: 'Oct 3, 11:05' };
+inc.sources = [
+  { id: 'datadog', ...SOURCES.datadog, where: 'acme org · datadoghq.eu', verified: 'Oct 4, 08:30' },
+  { id: 'es', ...SOURCES.es, where: 'https://logs.acme.internal:9200', verified: 'Oct 4, 08:31' },
+  { id: 'gke', ...SOURCES.gke, where: 'prod-gke-eu1 · GCP acme-prod', verified: 'Oct 4, 08:31' },
+];
+S.agents.push(inc, gke, aws, dbA);
+
+/* ---------- scripted content ---------- */
+const INVESTIGATION = [
+  { tool: 'Kubernetes', t: 'Check deployment payment-service', r: '2/3 replicas available' },
+  { tool: 'Kubernetes', t: 'Check pods', r: 'payment-service-7d9f-x2k  CrashLoopBackOff  14 restarts / 30 min' },
+  { tool: 'Kubernetes', t: 'Check events', r: 'OOMKilled — container exceeded memory limit 256Mi' },
+  { tool: 'Cloud Logging', t: 'Check logs (last 30 min)', r: 'Heap grows steadily after release v2.8.0' },
+  { tool: 'Analysis', t: 'Analyze findings', r: 'Memory regression introduced in v2.8.0' },
+];
+const REPORT_HTML = `<h3>Likely cause</h3>
+<p>payment-service pods run out of memory and restart. It started after release <code>v2.8.0</code> went out at 09:58.</p>
+<ul><li>Events show <code>OOMKilled</code> at the <code>256Mi</code> limit</li><li>14 restarts in 30 minutes on one pod, 2/3 replicas serving traffic</li><li>Logs show heap growth on every checkout request</li></ul>
+<h3>Recommended action</h3>`;
+const REPORT_ACTIONS = [
+  { label: 'Scale payment-service to 5 replicas', prompt: 'Scale payment-service to 5 replicas', tag: 'Needs approval', cls: 'warn' },
+  { label: 'Restart payment-service', prompt: 'Restart payment-service', tag: 'Needs approval', cls: 'warn' },
+  { label: 'Raise memory limit to 512Mi', tag: 'Not permitted — hand to payments team', cls: 'crit', disabled: true },
+];
+
+const READS = {
+  pods: {
+    steps: [{ tool: 'Kubernetes', t: 'List pods, all namespaces', r: '142 pods · 3 not Ready' }, { tool: 'Kubernetes', t: 'Read pod status', r: 'collected restart counts and reasons' }],
+    html: `<p>3 of 142 pods are unhealthy:</p><div class="tbl-wrap"><table><thead><tr><th>Namespace</th><th>Pod</th><th>Status</th><th>Restarts</th></tr></thead><tbody>
+<tr><td>payments</td><td class="mono">payment-service-7d9f-x2k</td><td><span class="pill crit">CrashLoopBackOff</span></td><td class="num">14</td></tr>
+<tr><td>checkout</td><td class="mono">cart-api-5c8b-q7w</td><td><span class="pill warn">Pending</span></td><td class="num">0</td></tr>
+<tr><td>batch</td><td class="mono">report-job-2841-mm2</td><td><span class="pill crit">Error</span></td><td class="num">3</td></tr></tbody></table></div>
+<p><code>cart-api</code> is Pending because no node has enough free CPU. Ask me why <code>payment-service</code> is failing for a full analysis.</p>`,
+  },
+  logs: {
+    steps: [{ tool: 'Cloud Logging', t: 'Query logs, severity ≥ ERROR, 30 min', r: '412 entries · 3 services' }],
+    html: `<p>Most errors come from <code>payment-service</code> (388), then <code>cart-api</code> (19) and <code>email-worker</code> (5). The payment errors are all <code>java.lang.OutOfMemoryError</code>.</p>`,
+  },
+  events: {
+    steps: [{ tool: 'Kubernetes', t: 'Read cluster events, 30 min', r: '27 warning events' }],
+    html: `<p>Warnings in the last 30 minutes: 14× <code>OOMKilled</code> (payments), 9× <code>FailedScheduling: Insufficient cpu</code> (checkout), 4× <code>BackOff</code> (batch).</p>`,
+  },
+  disks: {
+    steps: [{ tool: 'EC2', t: 'List instances tagged app=web', r: '6 running' }, { tool: 'CloudWatch', t: 'Disk usage, last hour', r: 'web-03 at 91%' }],
+    html: `<div class="tbl-wrap"><table><thead><tr><th>Instance</th><th>Type</th><th>Disk /var</th></tr></thead><tbody>
+<tr><td class="mono">web-01</td><td>m6i.medium</td><td class="num">54%</td></tr><tr><td class="mono">web-02</td><td>m6i.medium</td><td class="num">58%</td></tr>
+<tr><td class="mono">web-03</td><td>m6i.medium</td><td class="num"><b>91%</b></td></tr><tr><td class="mono">web-04</td><td>m6i.medium</td><td class="num">49%</td></tr>
+<tr><td class="mono">web-05</td><td>m6i.medium</td><td class="num">51%</td></tr><tr><td class="mono">web-06</td><td>m6i.medium</td><td class="num">47%</td></tr></tbody></table></div>
+<p><code>web-03</code> needs attention: old nginx logs fill <code>/var</code>.</p>`,
+  },
+  queries: {
+    steps: [{ tool: 'Query Insights', t: 'Top queries by latency, orders-db', r: '1 query over 2 s' }],
+    html: `<p>Slowest query on <code>orders-db</code>: <code>SELECT … FROM orders WHERE customer_id = $1 ORDER BY created_at</code>, p95 2.4 s, 1,820 calls/hour. An index on <code>(customer_id, created_at)</code> would help. Adding indexes is outside my permissions.</p>`,
+  },
+  dd: {
+    steps: [{ tool: 'Datadog APM', t: 'checkout p95 latency, last hour', q: 'p95:trace.http.request{service:checkout}', r: '3.8 s now · 280 ms baseline · jump at 10:04' },
+      { tool: 'Datadog APM', t: 'Where checkout spends its time', q: 'service:checkout · downstream breakdown', r: 'payment-service 71% · cart-api 9%' }],
+    html: `<p><code>checkout</code> p95 latency is <b>3.8 s</b>, up from a 280 ms baseline since 10:04. 71% of that time is spent waiting on <code>payment-service</code>.</p>`,
+  },
+  ddmon: {
+    steps: [{ tool: 'Datadog', t: 'Alerting monitors', q: 'monitors status:alert', r: '3 alerting' }, { tool: 'Datadog', t: 'Deploy events, last hour', q: 'events sources:argocd', r: '2 deploys' }],
+    html: `<div class="tbl-wrap"><table><thead><tr><th>Since</th><th>Monitor</th><th>State</th></tr></thead><tbody>
+<tr><td class="mono">10:04</td><td>Checkout p95 latency &gt; 2 s</td><td><span class="pill crit">Alert</span></td></tr>
+<tr><td class="mono">10:06</td><td>payment-service error rate &gt; 5%</td><td><span class="pill crit">Alert</span></td></tr>
+<tr><td class="mono">10:09</td><td>payments pods restarting</td><td><span class="pill crit">Alert</span></td></tr></tbody></table></div>
+<p>Deploys in the last hour: <code>payment-service v2.8.0</code> at 09:58 and <code>email-worker v1.14.2</code> at 09:31. The payment-service deploy happened 6 minutes before the first alert.</p>`,
+  },
+  es: {
+    steps: [{ tool: 'Elasticsearch', t: 'Search payment-service error logs', q: 'app-logs-* · service.name:"payment-service" AND log.level:"ERROR"', r: '388 hits in 30 min' },
+      { tool: 'Elasticsearch', t: 'Group by error type', q: 'terms aggregation on error.type', r: '3 error types' }],
+    html: `<div class="tbl-wrap"><table><thead><tr><th>Error type</th><th>Count</th><th>First seen</th></tr></thead><tbody>
+<tr><td class="mono">java.lang.OutOfMemoryError</td><td class="num">352</td><td class="mono">09:59:12</td></tr>
+<tr><td class="mono">java.net.SocketTimeoutException</td><td class="num">31</td><td class="mono">10:03:40</td></tr>
+<tr><td class="mono">ConnectionResetException</td><td class="num">5</td><td class="mono">10:05:02</td></tr></tbody></table></div>
+<p>Sample: <code>ERROR PaymentController - java.lang.OutOfMemoryError: Java heap space at ReceiptCache.put(ReceiptCache.java:88)</code>. All three types start after the 09:58 deploy.</p>`,
+  },
+};
+
+const INC_STEPS = [
+  { tool: 'Datadog', t: 'Find alerting monitors', q: 'monitors status:alert tag:service:checkout', r: '"Checkout p95 > 2 s" alerting since 10:04' },
+  { tool: 'Datadog APM', t: 'Break down checkout latency', q: 'p95:trace.http.request{service:checkout}', r: 'p95 3.8 s (baseline 280 ms) · 71% in payment-service' },
+  { tool: 'Datadog APM', t: 'Check payment-service errors', q: 'trace.http.request.errors{service:payment-service}', r: 'error rate 34% · timeouts and 503s' },
+  { tool: 'Datadog', t: 'Check payment-service memory', q: 'max:kubernetes.memory.usage{kube_deployment:payment-service}', r: 'hits 256Mi limit · saw-tooth since 09:58' },
+  { tool: 'Kubernetes', t: 'Read pod events in payments', q: 'events -n payments reason=OOMKilled', r: '14 × OOMKilled in 30 min' },
+  { tool: 'Elasticsearch', t: 'Search payment-service error logs', q: 'app-logs-* · service.name:"payment-service" AND log.level:"ERROR"', r: '388 hits · OutOfMemoryError: Java heap space · first 09:59:12' },
+  { tool: 'Datadog', t: 'Find recent deploys', q: 'events sources:argocd service:payment-service', r: 'v2.8.0 deployed 09:58:03 by ci-bot' },
+  { tool: 'Datadog', t: 'Rule out other causes', q: 'orders-db latency · node memory · nginx-* 5xx (Elasticsearch)', r: 'all normal' },
+  { tool: 'Analysis', t: 'Build timeline and correlate', r: 'deploy → heap growth → OOM restarts → payment timeouts → slow checkout' },
+];
+const INC_REPORT_HTML = `<h3>Incident summary</h3>
+<p>Checkout has been slow since 10:04 and 34% of payments fail. Customers see timeouts at the payment step.</p>
+<h3>Timeline</h3>
+<div class="tbl-wrap"><table><thead><tr><th>Time</th><th>What happened</th><th>Source</th></tr></thead><tbody>
+<tr><td class="mono">09:58</td><td>payment-service <code>v2.8.0</code> deployed</td><td><span class="tag">Datadog events</span></td></tr>
+<tr><td class="mono">09:59</td><td>First <code>OutOfMemoryError</code> in logs</td><td><span class="tag">Elasticsearch</span></td></tr>
+<tr><td class="mono">10:01</td><td>First pod <code>OOMKilled</code></td><td><span class="tag">Kubernetes</span></td></tr>
+<tr><td class="mono">10:04</td><td>Checkout p95 &gt; 2 s monitor alerts</td><td><span class="tag">Datadog monitor</span></td></tr>
+<tr><td class="mono">10:11</td><td>14 restarts, payment error rate 34%</td><td><span class="tag">Datadog APM</span></td></tr></tbody></table></div>
+<h3>Root cause <span class="pill ok">High confidence</span></h3>
+<p>Memory regression in payment-service <code>v2.8.0</code>. <code>ReceiptCache</code> grows on every payment until the pod reaches its 256Mi limit and is killed. While pods restart, checkout calls to payment-service time out.</p>
+<h3>Ruled out</h3>
+<ul><li>Database: orders-db latency normal (Datadog)</li><li>Network: no 5xx spike in <code>nginx-*</code> logs (Elasticsearch)</li><li>Nodes: all under 70% memory (Datadog)</li></ul>
+<h3>Next steps</h3>
+<p class="hint">I'm read-only. Changes go to another agent or the owning team.</p>`;
+const INC_ACTIONS = [
+  { label: 'Hand off: scale payment-service to 5', handoff: 'gke', prompt: 'Scale payment-service to 5 replicas', tag: 'Production GKE Agent', cls: 'warn' },
+  { label: 'Draft status update', prompt: 'Draft a status update', tag: 'Read-only', cls: 'ok' },
+  { label: 'Roll back to v2.7.3', tag: 'Not permitted — payments team', cls: 'crit', disabled: true },
+];
+const INC_DRAFT = `<p>Draft for your status page or incident channel. I don't post anything myself.</p>
+<blockquote><b>Investigating: slow checkout and failed payments</b><br>Since 10:04 UTC some customers see slow checkout and failed payments. We have found the cause in a payment service release deployed at 09:58 and are adding capacity while the fix is prepared. Next update in 30 minutes.</blockquote>`;
+
+const ACTS = {
+  scale: (a, text) => {
+    const n = +((text.match(/(\d+)\s*replica/i) || text.match(/to\s+(\d+)/i) || [])[1] || 5);
+    const from = a.replicas;
+    return { action: `Scale deployment payment-service from ${from} to ${n} replicas`, target: 'payments / payment-service', risk: 'Low — adds pods, no downtime',
+      steps: [{ tool: 'Kubernetes', t: `Scale deployment payment-service ${from} → ${n}`, r: 'replicas updated' }, { tool: 'Kubernetes', t: 'Wait for new pods', r: `${n}/${n} scheduled` }, { tool: 'Verify', t: 'Check pods Ready', r: `${n}/${n} Ready · no restarts in 2 min` }],
+      after: () => { a.replicas = n; }, reply: `<p>Done. <code>payment-service</code> now runs ${n}/${n} replicas, all Ready. This buys time, but the memory problem from <code>v2.8.0</code> is still there. The payments team needs to raise the limit or fix the leak.</p>`, log: `Scaled payment-service ${from} → ${n}` };
+  },
+  restart: () => ({ action: 'Rolling restart of deployment payment-service', target: 'payments / payment-service', risk: 'Medium — pods replaced one at a time',
+    steps: [{ tool: 'Kubernetes', t: 'Rollout restart payment-service', r: 'restart started' }, { tool: 'Kubernetes', t: 'Wait for rollout', r: '3/3 pods replaced' }, { tool: 'Verify', t: 'Check pods Ready', r: '3/3 Ready' }],
+    reply: '<p>Restart finished, 3/3 pods Ready. Expect them to run out of memory again within about 20 minutes, because the cause is in the code.</p>', log: 'Restarted payment-service' }),
+  power: (a, text) => { const vm = (text.match(/web-\d+/i) || ['web-03'])[0]; return { action: `Reboot instance ${vm}`, target: `EC2 / ${vm}`, risk: 'Medium — instance offline ~1 min',
+    steps: [{ tool: 'EC2', t: `Reboot ${vm}`, r: 'reboot requested' }, { tool: 'Verify', t: 'Instance status checks', r: '2/2 checks passed' }], reply: `<p>${vm} is back up and passes both status checks.</p>`, log: `Rebooted ${vm}` }; },
+  resize: (a, text) => { const vm = (text.match(/web-\d+/i) || ['web-03'])[0]; const ty = (text.match(/[a-z]\d[a-z]*\.\w+/i) || ['m6i.large'])[0]; return { action: `Change ${vm} instance type to ${ty}`, target: `EC2 / ${vm}`, risk: 'High — instance stops during change',
+    steps: [{ tool: 'EC2', t: `Stop ${vm}`, r: 'stopped' }, { tool: 'EC2', t: `Set type ${ty}`, r: 'modified' }, { tool: 'EC2', t: `Start ${vm}`, r: 'running' }, { tool: 'Verify', t: 'Status checks', r: '2/2 passed' }], reply: `<p>${vm} now runs as <code>${ty}</code> and passes status checks.</p>`, log: `Resized ${vm} → ${ty}` }; },
+  create: () => ({ action: 'Create Cloud SQL Postgres 16 instance staging-db (db-custom-2-8192)', target: 'acme-prod / europe-west1', risk: 'Low — new resource, adds cost (~$95/month)',
+    steps: [{ tool: 'Cloud SQL Admin', t: 'Create instance staging-db', r: 'provisioning' }, { tool: 'Cloud SQL Admin', t: 'Create database app', r: 'created' }, { tool: 'Verify', t: 'Connection test', r: 'connected OK' }], reply: '<p><code>staging-db</code> is up. Credentials are in Secret Manager under <code>staging-db-app</code>.</p>', log: 'Created staging-db' }),
+  backup: (a, text) => { const db = (text.match(/\w+-db/i) || ['billing-db'])[0]; return { action: `On-demand backup of ${db}`, target: `Cloud SQL / ${db}`, risk: 'Low — brief I/O increase',
+    steps: [{ tool: 'Backups', t: `Start backup ${db}`, r: 'running' }, { tool: 'Verify', t: 'Backup status', r: 'SUCCESSFUL · 4.2 GB' }], reply: `<p>Backup of ${db} completed (4.2 GB).</p>`, log: `Backed up ${db}` }; },
+};
+
+/* seed the GKE conversation so the page opens mid-incident */
+gke.thread.push(
+  { k: 'agent', html: '<p>Production GKE Agent is ready. Connected to <code>prod-gke-eu1</code> in project <code>acme-prod</code>.</p>' },
+  { k: 'user', t: 'Why is payment-service failing?' },
+  { k: 'steps', title: 'Investigated payment-service', steps: INVESTIGATION.map(s => ({ ...s, s: 'done' })) },
+  { k: 'agent', html: REPORT_HTML, actions: REPORT_ACTIONS },
+);
+gke.log.push(
+  { t: '10:41', x: 'Read deployment payment-service' }, { t: '10:41', x: 'Listed pods in payments' },
+  { t: '10:42', x: 'Read events (30 min)' }, { t: '10:42', x: 'Read logs (30 min)' },
+);
+for (const a of [aws, dbA]) a.thread.push({ k: 'agent', html: `<p>${esc(a.name)} is ready. I can work on: ${a.resources.map(r => `<code>${esc(r)}</code>`).join(', ')}.</p>` });
+/* the investigation agent opens with a finished investigation */
+inc.thread.push(
+  { k: 'agent', html: '<p>Incident Investigation Agent is ready. Data sources: <b>Datadog</b> (datadoghq.eu), <b>Elasticsearch</b> (<code>app-logs-*</code>, <code>nginx-*</code>) and <b>Kubernetes</b> <code>prod-gke-eu1</code>. I only read; I never change anything.</p>' },
+  { k: 'user', t: 'Checkout is slow since 10:04 — investigate' },
+  { k: 'steps', title: 'Investigated slow checkout', steps: INC_STEPS.map(s => ({ ...s, s: 'done' })) },
+  { k: 'agent', html: INC_REPORT_HTML, actions: INC_ACTIONS },
+);
+inc.log.push(
+  { t: '10:12', x: 'Datadog: read monitors status:alert' }, { t: '10:12', x: 'Datadog APM: checkout latency breakdown' },
+  { t: '10:13', x: 'Datadog: payment-service memory' }, { t: '10:13', x: 'Kubernetes: events in payments' },
+  { t: '10:13', x: 'Elasticsearch: searched app-logs-* (388 hits)' }, { t: '10:14', x: 'Datadog: deploy events' },
+);
+S.current = inc;
+
+/* ---------- rendering ---------- */
+const MODE_TXT = { allow: 'Allowed', approve: 'Needs approval', block: 'Blocked' };
+const pending = a => a.thread.filter(m => m.k === 'approval' && m.state === 'pending').length;
+
+function renderNav() {
+  $('#agentList').innerHTML = S.agents.map(a => {
+    const p = pending(a);
+    return `<li><button class="agent-btn" data-agent="${a.id}" aria-current="${a === S.current}"><span class="dot"></span><span class="nm">${esc(a.name)}</span>${p ? `<span class="badge">${p}</span>` : '<span></span>'}<span class="kd">${esc(a.kind)}</span></button></li>`;
+  }).join('');
+  $('#pendingCount').textContent = S.agents.reduce((n, a) => n + pending(a), 0);
+}
+
+function renderHead() {
+  const a = S.current;
+  $('#agentName').textContent = a.name;
+  $('#agentKind').textContent = a.kind;
+  const st = $('#agentStatus');
+  const p = pending(a);
+  st.className = 'pill ' + (S.busy ? 'neutral' : p ? 'warn' : 'ok');
+  st.textContent = S.busy ? '● Working' : p ? '● Waiting for approval' : '● Ready';
+  $('#suggest').innerHTML = TEMPLATES[a.tpl].suggest.map(s => `<button type="button" class="chip" data-say="${esc(s)}">${esc(s)}</button>`).join('');
+}
+
+function stepHTML(s) {
+  const ic = s.s === 'done' ? '✓' : '';
+  return `<div class="step ${s.s}"><span class="ic">${ic}</span><span class="tool">${esc(s.tool)}</span><span><div>${esc(s.t)}</div>${s.q ? `<code class="q">${esc(s.q)}</code>` : ''}${s.s === 'done' && s.r ? `<div class="res">${esc(s.r)}</div>` : ''}</span></div>`;
+}
+
+function msgHTML(m, i) {
+  if (m.k === 'user') return `<div class="msg user"><span class="who">You</span><div class="bubble">${esc(m.t)}</div></div>`;
+  if (m.k === 'steps') {
+    const done = m.steps.filter(s => s.s === 'done').length;
+    return `<div class="msg agent"><span class="who">Agent · tool calls</span><div class="steps"><div class="steps-head"><span>${esc(m.title)}</span><span class="mono">${done}/${m.steps.length}</span></div>${m.steps.map(stepHTML).join('')}</div></div>`;
+  }
+  if (m.k === 'refuse') return `<div class="msg agent"><span class="who">Agent</span><div class="refuse"><p><b>I can't do that.</b> ${esc(m.t)}</p><p class="mono" style="margin-top:6px">${esc(m.reason)}</p></div></div>`;
+  if (m.k === 'approval') {
+    const st = m.state === 'pending' ? '<span class="pill warn">Approval required</span>' : m.state === 'approved' ? `<span class="pill ok">Approved by you · ${m.at}</span>` : '<span class="pill neutral">Rejected · no changes made</span>';
+    return `<div class="msg agent"><span class="who">Agent · permission check</span><div class="approval ${m.state}">
+      <div class="row">${st}</div>
+      <dl><dt>Action</dt><dd>${esc(m.p.action)}</dd><dt>Target</dt><dd class="mono">${esc(m.p.target)}</dd><dt>Capability</dt><dd>${esc(m.cap)} <span class="mode approve">Needs approval</span></dd><dt>Impact</dt><dd>${esc(m.p.risk)}</dd></dl>
+      ${m.state === 'pending' ? `<div class="row"><button class="btn primary" data-approve="${i}">Approve</button><button class="btn" data-reject="${i}">Reject</button></div>` : ''}
+    </div></div>`;
+  }
+  const acts = m.actions ? `<div class="actions">${m.actions.map(x => `<button class="act" ${x.disabled ? 'disabled' : x.handoff ? `data-handoff="${x.handoff}" data-prompt="${esc(x.prompt)}"` : `data-say="${esc(x.prompt)}"`}>${esc(x.label)} <small class="${x.cls}">${esc(x.tag)}</small></button>`).join('')}</div>` : '';
+  return `<div class="msg agent"><span class="who">Agent</span><div class="bubble">${m.html}${acts}</div></div>`;
+}
+
+function renderThread() {
+  const el = $('#thread');
+  el.innerHTML = S.current.thread.map(msgHTML).join('');
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderScope() {
+  const a = S.current, t = TEMPLATES[a.tpl];
+  const outside = t.outside.map(o => o[1]);
+  $('#scope').innerHTML = `
+    <button class="btn scope-close" type="button" data-close-scope>Close</button>
+    <div class="blk"><span class="eyebrow">Responsibility</span><h2>${esc(a.name)}</h2><p>${esc(a.purpose)}</p></div>
+    <div class="blk"><span class="eyebrow">Infrastructure access</span><ul class="infra">${a.resources.map(r => `<li>${esc(r)}</li>`).join('')}</ul>
+      <div class="boundary">Outside scope: ${outside.map(esc).join(', ') || 'everything else'}. Requests about these are refused.</div></div>
+    ${a.sources ? `<div class="blk"><span class="eyebrow">Data sources · ${a.sources.length} connected</span>
+      ${a.sources.map(s => `<div class="srcbox"><div class="row"><b>${esc(s.name)}</b><span class="pill ok">Read-only</span></div>
+        <div class="mono">${esc(s.where)}</div><div class="hint">${esc(s.method)} · ${esc(s.ident)} · verified ${esc(s.verified)}</div>
+        <div class="tags">${s.grants.map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div>
+        <div class="hint">Never granted: ${s.never.map(g => `<code>${esc(g)}</code>`).join(', ')}</div></div>`).join('')}
+      <div class="boundary">Not connected: ${MORE_SOURCES.map(esc).join(', ')}. Add them from agent settings.</div></div>`
+    : `<div class="blk"><span class="eyebrow">Connection</span>
+      <ul class="infra conn"><li><span><b>${esc(a.conn.method)}</b><br>${esc(a.conn.identity)}<br><span class="hint">Verified ${esc(a.conn.verified)} · short-lived tokens, no stored keys</span></span></li></ul></div>
+    <div class="blk"><span class="eyebrow">Cloud permissions</span>${(() => { const g = grantsFor(a.tpl, a.caps), cus = CLOUD[a.tpl].provider === 'gcp';
+      return `<div class="tags">${g.granted.map(x => `<span class="tag">${esc(x.replace('custom:', cus ? 'custom role: ' : ''))}</span>`).join('')}</div>
+      ${g.withheld.length ? `<p class="hint">Never granted: ${g.withheld.map(x => `<code>${esc(x)}</code>`).join(', ')}. Blocked actions fail in the cloud even if the agent tried.</p>` : ''}`; })()}</div>`}
+    <div class="blk"><span class="eyebrow">Tools</span><div class="tags">${a.tools.map(x => `<span class="tag">${esc(x)}</span>`).join('')}</div></div>
+    <div class="blk"><span class="eyebrow">Permissions</span><ul class="caps">${a.caps.map(c => `<li><span>${esc(c.label)}</span><span class="mode ${c.mode}">${MODE_TXT[c.mode]}</span></li>`).join('')}</ul></div>
+    <div class="blk"><span class="eyebrow">Audit log</span><ul class="log">${a.log.slice().reverse().map(l => `<li><time>${l.t}</time><span class="${l.c || ''}">${esc(l.x)}</span></li>`).join('') || '<li><time>—</time><span>No activity yet</span></li>'}</ul></div>`;
+}
+
+function render() { renderNav(); renderHead(); renderThread(); renderScope(); }
+
+/* ---------- agent behaviour ---------- */
+async function runSteps(a, title, steps) {
+  const m = { k: 'steps', title, steps: steps.map(s => ({ ...s, s: 'wait' })) };
+  a.thread.push(m);
+  for (const s of m.steps) {
+    s.s = 'run'; if (a === S.current) renderThread();
+    await sleep(650);
+    s.s = 'done'; a.log.push({ t: now(), x: s.t, c: s.tool === 'Verify' ? 'k-change' : '' });
+    if (a === S.current) { renderThread(); renderScope(); }
+  }
+}
+
+function refuse(a, t, reason) {
+  a.thread.push({ k: 'refuse', t, reason });
+  a.log.push({ t: now(), x: `Refused: ${reason}`, c: 'k-deny' });
+}
+
+async function handle(text) {
+  const a = S.current, t = TEMPLATES[a.tpl], q = text.toLowerCase();
+  a.thread.push({ k: 'user', t: text });
+  S.busy = true; render();
+  await sleep(350);
+
+  const out = t.outside.find(([kw]) => q.includes(kw) && !a.resources.some(r => r.toLowerCase().includes(kw)));
+  // the investigation agent answers questions about changes ("why is it restarting?") but refuses to make them
+  const question = a.tpl === 'inc' && /^(why|what|which|when|how|show|find|investigate)\b/.test(q);
+  const blocked = question ? null : a.caps.find(c => c.mode === 'block' && c.kw.some(k => q.includes(k)));
+  const missing = t.missing.find(([kw]) => q.includes(kw));
+
+  if (out) refuse(a, `${out[1]} is not connected to this agent, so I have no access to it.`, `outside infrastructure scope: ${out[1]}`);
+  else if (blocked) refuse(a, `"${blocked.label}" is blocked for this agent. An admin must change the agent's permissions first.`, `capability blocked: ${blocked.label}`);
+  else if (missing) refuse(a, `${missing[1]} is not one of this agent's capabilities.`, `capability not configured: ${missing[1]}`);
+  else if (a.tpl === 'k8s' && /why|fail|crash|restarting|broken/.test(q)) {
+    await runSteps(a, 'Investigating payment-service', INVESTIGATION);
+    a.thread.push({ k: 'agent', html: REPORT_HTML, actions: REPORT_ACTIONS });
+  } else if (a.tpl === 'inc' && /draft|status update|postmortem/.test(q)) {
+    a.thread.push({ k: 'agent', html: INC_DRAFT });
+  } else if (a.tpl === 'inc' && /investigat|root cause|incident|slow|spike|outage|5xx|why/.test(q)) {
+    await runSteps(a, 'Investigating slow checkout', INC_STEPS);
+    a.thread.push({ k: 'agent', html: INC_REPORT_HTML, actions: INC_ACTIONS });
+  } else {
+    const cap = a.caps.find(c => c.mode === 'approve' && c.kw.some(k => q.includes(k)))
+             || a.caps.find(c => c.mode === 'allow' && c.kw.some(k => q.includes(k)));
+    if (cap && cap.mode === 'approve') {
+      const p = ACTS[cap.act](a, text);
+      a.thread.push({ k: 'approval', cap: cap.label, p, state: 'pending' });
+      a.log.push({ t: now(), x: `Approval requested: ${p.action}`, c: 'k-approve' });
+    } else if (cap) {
+      const r = READS[cap.read];
+      await runSteps(a, `Reading: ${cap.label.toLowerCase()}`, r.steps);
+      a.thread.push({ k: 'agent', html: r.html });
+    } else {
+      a.thread.push({ k: 'agent', html: `<p>I can help with: ${a.caps.filter(c => c.mode !== 'block').map(c => esc(c.label)).join(', ')}. Try one of the suggestions below.</p>` });
+    }
+  }
+  S.busy = false; render();
+}
+
+async function decide(i, ok) {
+  const a = S.current, m = a.thread[i];
+  if (!m || m.state !== 'pending') return;
+  m.state = ok ? 'approved' : 'rejected';
+  m.at = now();
+  a.log.push({ t: m.at, x: `${ok ? 'Approved' : 'Rejected'} by you: ${m.p.action}`, c: ok ? 'k-approve' : 'k-deny' });
+  if (!ok) { a.thread.push({ k: 'agent', html: '<p>Cancelled. Nothing was changed.</p>' }); render(); return; }
+  S.busy = true; render();
+  await runSteps(a, m.p.action, m.p.steps);
+  m.p.after && m.p.after();
+  a.log.push({ t: now(), x: m.p.log, c: 'k-change' });
+  a.thread.push({ k: 'agent', html: m.p.reply });
+  S.busy = false; render();
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-close-scope]')) { $('#scope').classList.remove('open'); $('#scopeToggle').setAttribute('aria-expanded', false); return; }
+  const ag = e.target.closest('[data-agent]');
+  if (ag) { S.current = S.agents.find(a => a.id === ag.dataset.agent); render(); return; }
+  const ho = e.target.closest('[data-handoff]');
+  if (ho && !S.busy) {
+    const from = S.current, to = S.agents.find(a => a.id === ho.dataset.handoff);
+    if (!to) return;
+    from.log.push({ t: now(), x: `Handed off to ${to.name}: ${ho.dataset.prompt}` });
+    to.thread.push({ k: 'agent', html: `<p><b>Handoff from ${esc(from.name)}.</b> Context: checkout slow since 10:04, root cause payment-service running out of memory after <code>v2.8.0</code>. The requested action still goes through my own permission check.</p>` });
+    to.log.push({ t: now(), x: `Handoff received from ${from.name}` });
+    S.current = to;
+    handle(ho.dataset.prompt);
+    return;
+  }
+  const say = e.target.closest('[data-say]');
+  if (say && !S.busy) { handle(say.dataset.say); return; }
+  const ap = e.target.closest('[data-approve]'); if (ap && !S.busy) { decide(+ap.dataset.approve, true); return; }
+  const rj = e.target.closest('[data-reject]'); if (rj && !S.busy) { decide(+rj.dataset.reject, false); return; }
+});
+$('#composer').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#prompt').value.trim();
+  if (!v || S.busy) return;
+  $('#prompt').value = '';
+  handle(v);
+});
+$('#scopeToggle').addEventListener('click', () => {
+  const s = $('#scope'), open = s.classList.toggle('open');
+  $('#scopeToggle').setAttribute('aria-expanded', open);
+});
+
+/* ---------- create-agent wizard ---------- */
+const W = { step: 0, tpl: 'k8s', name: '', purpose: '', res: [], caps: [], conn: null, err: '' };
+const STEPS = ['Basics', 'Connect infrastructure', 'Capabilities', 'Review'];
+
+function setupCommands() {
+  const c = W.conn, g = grantsFor(W.tpl, W.caps), sa = `${c.sa}@${c.project}.iam.gserviceaccount.com`;
+  if (c.provider === 'gcp') {
+    const custom = CLOUD[W.tpl].custom;
+    const lines = [
+      `# 1. Create the agent's own service account`,
+      `gcloud iam service-accounts create ${c.sa} \\\n  --project=${c.project} --display-name="DevOps agent: ${W.name}"`,
+      ``, `# 2. Grant only the roles its capabilities need`,
+    ];
+    for (const r of g.granted) {
+      if (r.startsWith('custom:')) {
+        const id = r.slice(7);
+        lines.push(`gcloud iam roles create ${id} --project=${c.project} \\\n  --permissions=${custom[id].join(',')}`);
+        lines.push(`gcloud projects add-iam-policy-binding ${c.project} \\\n  --member="serviceAccount:${sa}" --role="projects/${c.project}/roles/${id}"`);
+      } else lines.push(`gcloud projects add-iam-policy-binding ${c.project} \\\n  --member="serviceAccount:${sa}" --role="${r}"`);
+    }
+    lines.push(``, `# 3. Let the platform impersonate it (short-lived tokens, no keys)`,
+      `gcloud iam service-accounts add-iam-policy-binding ${sa} \\\n  --member="serviceAccount:${PLATFORM.gcp}" \\\n  --role="roles/iam.serviceAccountTokenCreator"`);
+    return lines.join('\n');
+  }
+  const trust = { Version: '2012-10-17', Statement: [{ Effect: 'Allow', Principal: { AWS: PLATFORM.aws }, Action: 'sts:AssumeRole', Condition: { StringEquals: { 'sts:ExternalId': c.ext } } }] };
+  const policy = { Version: '2012-10-17', Statement: [{ Effect: 'Allow', Action: g.granted, Resource: '*' }] };
+  return [`# 1. Trust policy: only the platform, only with your external ID`,
+    `cat > trust.json <<'EOF'\n${JSON.stringify(trust, null, 2)}\nEOF`,
+    `aws iam create-role --role-name ${c.sa} \\\n  --assume-role-policy-document file://trust.json`,
+    ``, `# 2. Permissions: only what the capabilities need`,
+    `cat > policy.json <<'EOF'\n${JSON.stringify(policy, null, 2)}\nEOF`,
+    `aws iam put-role-policy --role-name ${c.sa} \\\n  --policy-name agent-scope --policy-document file://policy.json`].join('\n');
+}
+
+async function testConnection() {
+  const c = W.conn, gcp = c.provider === 'gcp';
+  W.err = '';
+  if (gcp ? !/^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$/.test(c.ident) : !/^arn:aws:iam::\d{12}:role\/[\w+=,.@-]+$/.test(c.ident)) {
+    W.err = gcp ? 'Enter the service account email, for example devops-agent-x@my-project.iam.gserviceaccount.com.' : 'Enter the role ARN, for example arn:aws:iam::123456789012:role/devops-agent-x.';
+    renderWizard(); return;
+  }
+  c.testing = true; c.tested = false;
+  c.checks = (gcp
+    ? [['Impersonate service account', 'token issued, expires in 1 h'], [`Read project ${c.project}`, 'OK'], ['Discover resources', CLOUD[W.tpl].discover], ['Compare granted roles with capabilities', 'match'], ['Look for excess permissions', 'none (no Owner / Editor)']]
+    : [['AssumeRole with external ID', 'session issued, expires in 1 h'], [`Read account ${c.project}`, 'OK'], ['Discover resources', CLOUD[W.tpl].discover], ['Compare role policy with capabilities', 'match'], ['Look for excess permissions', 'none (no AdministratorAccess)']]
+  ).map(([t, r]) => ({ t, r, s: 'wait' }));
+  renderWizard();
+  for (const k of c.checks) { k.s = 'run'; renderWizard(); await sleep(450); k.s = 'done'; renderWizard(); }
+  c.testing = false; c.tested = true;
+  if (!W.res.length) W.res = [TEMPLATES[W.tpl].resources[0]];
+  renderWizard();
+}
+
+/* ---------- multi-source connect (Investigation agents) ---------- */
+const DEFAULTS = {
+  k8s: ['Staging GKE Agent', 'Help developers debug workloads on the staging cluster.'],
+  vm: ['Dev AWS Agent', 'Look after the dev EC2 fleet: health, disks, sizing.'],
+  db: ['Staging Database Agent', 'Provision and monitor staging databases.'],
+  inc: ['Payments Incident Agent', 'Find root causes of payment incidents using Datadog, Elasticsearch and Kubernetes. Never changes anything.'],
+};
+const DD_SITES = ['datadoghq.com', 'datadoghq.eu', 'us3.datadoghq.com', 'us5.datadoghq.com', 'ap1.datadoghq.com'];
+function defaultSrcs(name) {
+  const sl = slug(name);
+  return [
+    { id: 'datadog', on: true, site: 'datadoghq.eu', api: '3f9c2b7e1a4d8f60c5b2e9a17d3f4c81', app: '9b1e4c7a2f5d8e03b6a9c2f5e8d1b4a7c0f3e6d9', tested: false, testing: false, checks: [], err: '' },
+    { id: 'es', on: true, url: 'https://logs.acme.internal:9200', idx: 'app-logs-*, nginx-*', key: 'VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw==', tested: false, testing: false, checks: [], err: '' },
+    { id: 'gke', on: true, project: 'acme-prod', cluster: 'prod-gke-eu1', ident: `devops-agent-${sl}@acme-prod.iam.gserviceaccount.com`, tested: false, testing: false, checks: [], err: '' },
+  ];
+}
+const idxList = s => s.idx.split(',').map(x => x.trim()).filter(Boolean);
+function srcSnippet(s) {
+  if (s.id === 'datadog') return `# Datadog → Organization Settings → Service Accounts → New: "sre-agent" (role: Datadog Read Only)
+# Then: sre-agent → Application Keys → New key "devops-agent-${slug(W.name)}"
+# Scopes to tick (nothing else):
+${SOURCES.datadog.grants.map(g => '  ' + g).join('\n')}
+# Leave unticked: ${SOURCES.datadog.never.join(', ')}`;
+  if (s.id === 'es') return `POST /_security/api_key
+${JSON.stringify({ name: `devops-agent-${slug(W.name)}`, expiration: '90d', role_descriptors: { 'incident-agent-read': { cluster: [], indices: [{ names: idxList(s), privileges: ['read', 'view_index_metadata'] }] } } }, null, 2)}`;
+  const sa = s.ident;
+  return `gcloud iam service-accounts create ${sa.split('@')[0]} --project=${s.project}
+gcloud projects add-iam-policy-binding ${s.project} \\
+  --member="serviceAccount:${sa}" --role="roles/container.viewer"
+gcloud iam service-accounts add-iam-policy-binding ${sa} \\
+  --member="serviceAccount:${PLATFORM.gcp}" --role="roles/iam.serviceAccountTokenCreator"`;
+}
+function srcStatus(s) {
+  return s.tested ? '<span class="pill ok">Connected</span>' : s.testing ? '<span class="pill neutral">Testing…</span>' : s.on ? '<span class="pill neutral">Not tested</span>' : '<span class="pill neutral">Off</span>';
+}
+function srcCard(s) {
+  const id = s.id, meta = SOURCES[id];
+  const intro = {
+    datadog: 'Uses an API key and an application key from a dedicated Datadog service account. Only read scopes are ticked. Keys are stored encrypted in the platform vault; the model never sees them.',
+    es: 'Uses an Elasticsearch API key whose role can only read the log indices you list. It expires after 90 days.',
+    gke: 'Read-only service account in your GCP project, impersonated by the platform. No keys are stored.',
+  }[id];
+  const fields = {
+    datadog: `<div class="grid2"><div class="field"><label for="s-datadog-site">Datadog site</label><select id="s-datadog-site">${DD_SITES.map(x => `<option ${x === s.site ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+      <div class="field"><label for="s-datadog-api">API key</label><input type="password" id="s-datadog-api" value="${esc(s.api)}" autocomplete="off"></div>
+      <div class="field"><label for="s-datadog-app">Application key</label><input type="password" id="s-datadog-app" value="${esc(s.app)}" autocomplete="off"></div></div>`,
+    es: `<div class="grid2"><div class="field"><label for="s-es-url">Endpoint URL</label><input type="text" id="s-es-url" value="${esc(s.url)}"></div>
+      <div class="field"><label for="s-es-idx">Index patterns</label><input type="text" id="s-es-idx" value="${esc(s.idx)}"></div>
+      <div class="field"><label for="s-es-key">API key (encoded)</label><input type="password" id="s-es-key" value="${esc(s.key)}" autocomplete="off"></div></div>`,
+    gke: `<div class="grid2"><div class="field"><label for="s-gke-project">GCP project ID</label><input type="text" id="s-gke-project" value="${esc(s.project)}"></div>
+      <div class="field"><label for="s-gke-cluster">Cluster</label><input type="text" id="s-gke-cluster" value="${esc(s.cluster)}"></div>
+      <div class="field"><label for="s-gke-ident">Service account email</label><input type="text" id="s-gke-ident" value="${esc(s.ident)}"></div></div>`,
+  }[id];
+  return `<div class="src ${s.on ? '' : 'off'}">
+    <div class="src-head"><label><input type="checkbox" data-src-on="${id}" ${s.on ? 'checked' : ''}> ${esc(meta.name)}</label><span id="s-${id}-pill">${srcStatus(s)}</span></div>
+    ${s.on ? `<p class="hint" style="margin:0">${intro}</p>
+      <div class="cmd"><button type="button" class="btn copy" data-copy="s-${id}-cmd">Copy</button><pre id="s-${id}-cmd">${esc(srcSnippet(s))}</pre></div>
+      ${fields}
+      <div class="row"><button type="button" class="btn" data-test-src="${id}" ${s.testing ? 'disabled' : ''}>${s.tested ? 'Test again' : 'Test connection'}</button></div>
+      ${s.checks.length ? `<div class="checks">${s.checks.map(k => `<div class="${k.s}"><span>${k.s === 'done' ? '✓' : k.s === 'run' ? '…' : ''}</span><span>${esc(k.t)}${k.s === 'done' ? ` — <span class="mono">${esc(k.r)}</span>` : ''}</span></div>`).join('')}</div>` : ''}
+      ${s.err ? `<p class="err" role="alert" style="margin:0">${esc(s.err)}</p>` : ''}` : ''}
+  </div>`;
+}
+function syncSrcs() {
+  const v = id => { const el = document.getElementById(id); return el ? el.value.trim() : null; };
+  for (const s of W.srcs) {
+    const fields = { datadog: ['site', 'api', 'app'], es: ['url', 'idx', 'key'], gke: ['project', 'cluster', 'ident'] }[s.id];
+    for (const f of fields) {
+      const nv = v(`s-${s.id}-${f}`);
+      if (nv !== null && nv !== s[f]) { s[f] = nv; s.tested = false; s.checks = []; }
+    }
+  }
+}
+async function testSource(id) {
+  const s = W.srcs.find(x => x.id === id);
+  s.err = '';
+  if (id === 'datadog' && !/^[a-f0-9]{32}$/.test(s.api)) s.err = 'Datadog API keys are 32 hexadecimal characters.';
+  else if (id === 'datadog' && !/^[a-f0-9]{40}$/.test(s.app)) s.err = 'Datadog application keys are 40 hexadecimal characters.';
+  else if (id === 'es' && !/^https:\/\//.test(s.url)) s.err = 'Use an https:// endpoint. Logs and API keys must not travel unencrypted.';
+  else if (id === 'es' && (!idxList(s).length || idxList(s).some(x => x === '*' || x.startsWith('.')))) s.err = 'List your log indices, for example app-logs-*. "*" and system indices (starting with ".") are not allowed.';
+  else if (id === 'es' && !/^[A-Za-z0-9+/=]{20,}$/.test(s.key)) s.err = 'Paste the "encoded" value returned when you created the API key.';
+  else if (id === 'gke' && !/^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$/.test(s.ident)) s.err = 'Enter the service account email, for example devops-agent-x@my-project.iam.gserviceaccount.com.';
+  if (s.err) { renderWizard(); return; }
+  s.testing = true; s.tested = false;
+  s.checks = ({
+    datadog: () => [['Validate API key', `valid · org acme (${s.site})`], ['Validate application key', 'valid · owner sre-agent'], ['Check key scopes', '6 read scopes, no write scopes'],
+      ['Try a write call (monitors_write)', 'denied, as expected'], ['Discover data', '214 monitors · APM on 38 services · 15 days of logs']],
+    es: () => [['Connect over TLS', 'cluster logs-prod · Elasticsearch 8.15'], ['Authenticate API key', 'OK · expires in 90 days'], [`Read ${idxList(s).join(', ')}`, 'OK · 1.2 B documents'],
+      ['Try writing to the indices', 'denied, as expected'], ['Try reading other indices (billing-*, .security*)', 'denied, as expected']],
+    gke: () => [['Impersonate service account', 'token issued, expires in 1 h'], [`Find cluster ${s.cluster}`, 'found · 142 pods'], ['Try updating a deployment', 'denied, as expected']],
+  })[id]().map(([t, r]) => ({ t, r, s: 'wait' }));
+  renderWizard();
+  for (const k of s.checks) { k.s = 'run'; renderWizard(); await sleep(400); k.s = 'done'; renderWizard(); }
+  s.testing = false; s.tested = true;
+  renderWizard();
+}
+function srcWhere(s) {
+  return s.id === 'datadog' ? `acme org · ${s.site}` : s.id === 'es' ? `${s.url} · ${idxList(s).join(', ')}` : `${s.cluster} · GCP ${s.project}`;
+}
+
+function openWizard() {
+  Object.assign(W, { step: 0, tpl: 'k8s', name: 'Staging GKE Agent', purpose: 'Help developers debug workloads on the staging cluster.', res: ['GKE cluster: staging-gke-eu1'], caps: clone(TEMPLATES.k8s.caps), err: '' });
+  W.conn = defaultConn('k8s', W.name);
+  W.srcs = defaultSrcs(W.name);
+  $('#modal').hidden = false; renderWizard();
+  setTimeout(() => { const f = $('#wizBody input'); f && f.focus(); }, 0);
+}
+function closeWizard() { $('#modal').hidden = true; $('#newAgent').focus(); }
+
+function renderWizard() {
+  $('#stepper').innerHTML = STEPS.map((s, i) => `<li class="${i === W.step ? 'on' : i < W.step ? 'done' : ''}"><span>${i < W.step ? '✓' : i + 1}</span>${s}</li>`).join('');
+  const t = TEMPLATES[W.tpl];
+  let h = '';
+  if (W.step === 0) {
+    h = `<div class="field"><span class="lbl">Agent type</span><div class="tpls">${Object.entries(TEMPLATES).map(([k, v]) => `<button type="button" class="tpl" data-tpl="${k}" aria-pressed="${k === W.tpl}"><b>${v.label}</b><span>${v.blurb}</span></button>`).join('')}</div></div>
+      <div class="field"><label for="wName">Agent name</label><input type="text" id="wName" value="${esc(W.name)}"></div>
+      <div class="field"><label for="wPurpose">What is this agent responsible for?</label><textarea id="wPurpose">${esc(W.purpose)}</textarea></div>`;
+  } else if (W.step === 1 && W.tpl === 'inc') {
+    h = `<div class="field"><span class="lbl">Connect data sources</span>
+        <p class="hint" style="margin:0">Pick where this agent looks during an incident. Every source gets read-only credentials, and each test also checks that writes are denied.</p></div>
+      ${W.srcs.map(srcCard).join('')}
+      <div class="field"><span class="lbl">More sources</span><div class="tags">${MORE_SOURCES.map(x => `<span class="tag">${esc(x)} · later</span>`).join('')}</div></div>`;
+  } else if (W.step === 1) {
+    const c = W.conn, gcp = c.provider === 'gcp';
+    h = `<div class="field"><span class="lbl">${gcp ? 'Connect a GCP project' : 'Connect an AWS account'}</span>
+        <p class="hint" style="margin:0">${gcp
+          ? 'The agent gets its own service account in your project. The platform impersonates it to get short-lived tokens. No service account keys are uploaded or stored.'
+          : 'The agent gets its own IAM role in your account. The platform assumes it with an external ID to get short-lived credentials. No access keys are uploaded or stored.'}</p></div>
+      <div class="field"><label for="wProject">${gcp ? 'GCP project ID' : 'AWS account ID'}</label><input type="text" id="wProject" value="${esc(c.project)}"></div>
+      <div class="field"><span class="lbl">Run these commands ${gcp ? 'in Cloud Shell' : 'with AWS CLI'}</span>
+        <div class="cmd"><button type="button" class="btn copy" data-copy>Copy</button><pre id="cmdText">${esc(setupCommands())}</pre></div>
+        <p class="hint" style="margin:0">Permissions come from the default capabilities for this agent type. If you change capabilities on the next step, the review shows the updated list. Blocked capabilities are never granted.</p></div>
+      <div class="field"><label for="wIdent">${gcp ? 'Service account email' : 'Role ARN'}</label><input type="text" id="wIdent" value="${esc(c.ident)}"></div>
+      ${!gcp ? `<div class="field"><span class="lbl">External ID</span><code>${esc(c.ext)}</code></div>` : ''}
+      <div class="row"><button type="button" class="btn primary" data-test ${c.testing ? 'disabled' : ''}>${c.tested ? 'Test again' : 'Test connection'}</button>
+        ${c.tested ? '<span class="pill ok">Connected</span>' : c.testing ? '<span class="pill neutral">Testing…</span>' : '<span class="pill neutral">Not tested</span>'}</div>
+      ${c.checks.length ? `<div class="steps">${c.checks.map(k => `<div class="step ${k.s}"><span class="ic">${k.s === 'done' ? '✓' : ''}</span><span class="tool">check</span><span><div>${esc(k.t)}</div>${k.s === 'done' ? `<div class="res">${esc(k.r)}</div>` : ''}</span></div>`).join('')}</div>` : ''}
+      <div class="field"><span class="lbl">Resources this agent can reach</span>
+        ${c.tested ? `<div class="res-list">${t.resources.map((r, i) => `<label><input type="checkbox" id="wRes${i}" data-res="${esc(r)}" ${W.res.includes(r) ? 'checked' : ''}> ${esc(r)}</label>`).join('')}</div>
+          <p class="hint" style="margin:0">Unselected resources stay outside the agent's scope, even if the cloud identity can see them.</p>`
+        : '<p class="hint" style="margin:0">Test the connection to list resources.</p>'}</div>`;
+  } else if (W.step === 2) {
+    h = `<div class="field"><span class="lbl">Capabilities &amp; permissions</span><p class="hint" style="margin:0">Allowed runs directly. Needs approval waits for a person. Blocked is always refused.</p>
+      <div>${W.caps.map((c, i) => `<div class="cap-row"><span>${esc(c.label)}</span><span class="seg" role="group" aria-label="${esc(c.label)}">${['allow', 'approve', 'block'].map(m => `<button type="button" class="${m}" data-cap="${i}" data-mode="${m}" aria-pressed="${c.mode === m}">${MODE_TXT[m]}</button>`).join('')}</span></div>`).join('')}</div></div>`;
+  } else if (W.tpl === 'inc') {
+    h = `<dl class="review"><dt>Name</dt><dd>${esc(W.name)}</dd><dt>Type</dt><dd>${esc(t.label)} · read-only</dd><dt>Responsibility</dt><dd>${esc(W.purpose)}</dd>
+      <dt>Data sources</dt><dd>${W.srcs.filter(s => s.on).map(s => `<div class="srcbox" style="margin-bottom:6px"><b>${esc(SOURCES[s.id].name)}</b><span class="mono">${esc(srcWhere(s))}</span>
+        <div class="tags">${(s.id === 'es' ? [...idxList(s).map(i => 'read: ' + i), 'view_index_metadata'] : SOURCES[s.id].grants).map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div></div>`).join('')}</dd>
+      <dt>Permissions</dt><dd><ul class="caps">${W.caps.map(c => `<li><span>${esc(c.label)}</span><span class="mode ${c.mode}">${MODE_TXT[c.mode]}</span></li>`).join('')}</ul></dd></dl>`;
+  } else {
+    h = `<dl class="review"><dt>Name</dt><dd>${esc(W.name)}</dd><dt>Type</dt><dd>${esc(t.label)} · ${esc(t.kind)}</dd><dt>Responsibility</dt><dd>${esc(W.purpose)}</dd>
+      <dt>Connection</dt><dd><code>${esc(W.conn.ident)}</code><br><span class="hint">${W.conn.provider === 'gcp' ? 'Service account impersonation' : 'AssumeRole + external ID'} · tested</span></dd>
+      <dt>Infrastructure</dt><dd>${W.res.map(r => `<code>${esc(r)}</code>`).join('<br>')}</dd>
+      <dt>Cloud permissions</dt><dd>${(() => { const g = grantsFor(W.tpl, W.caps); return `<div class="tags">${g.granted.map(x => `<span class="tag">${esc(x.replace('custom:', 'custom role: '))}</span>`).join('')}</div>${g.withheld.length ? `<p class="hint" style="margin:6px 0 0">Never granted: ${g.withheld.map(x => `<code>${esc(x)}</code>`).join(', ')}</p>` : ''}`; })()}
+        <p class="hint" style="margin:6px 0 0">If you changed capabilities, update the cloud identity to match. The platform re-checks permissions before the agent goes live.</p></dd>
+      <dt>Permissions</dt><dd><ul class="caps">${W.caps.map(c => `<li><span>${esc(c.label)}</span><span class="mode ${c.mode}">${MODE_TXT[c.mode]}</span></li>`).join('')}</ul></dd></dl>`;
+  }
+  if (W.err) h += `<p class="err" role="alert">${esc(W.err)}</p>`;
+  $('#wizBody').innerHTML = h;
+  $('#wizBack').textContent = W.step === 0 ? 'Cancel' : 'Back';
+  $('#wizNext').textContent = W.step === 3 ? 'Create agent' : 'Next';
+}
+
+function syncWizard() {
+  if (W.step === 0) { W.name = $('#wName').value.trim(); W.purpose = $('#wPurpose').value.trim(); }
+  if (W.step === 1 && W.tpl === 'inc') { syncSrcs(); return; }
+  if (W.step === 1) {
+    const p = $('#wProject').value.trim(), id = $('#wIdent').value.trim(), c = W.conn;
+    if (p !== c.project || id !== c.ident) {
+      if (p !== c.project) {
+        c.project = p;
+        c.ident = c.provider === 'gcp' ? `${c.sa}@${p}.iam.gserviceaccount.com` : `arn:aws:iam::${p}:role/${c.sa}`;
+      } else c.ident = id;
+      c.tested = false; c.checks = [];
+    }
+    if (c.tested) W.res = [...document.querySelectorAll('[data-res]')].filter(x => x.checked).map(x => x.dataset.res);
+  }
+}
+
+// update in place (a full re-render here would swallow a click on "Test connection")
+$('#wizBody').addEventListener('change', e => {
+  if (e.target.id.startsWith('s-')) {
+    syncSrcs();
+    for (const s of W.srcs) {
+      const pre = document.getElementById(`s-${s.id}-cmd`); if (pre) pre.textContent = srcSnippet(s);
+      const pill = document.getElementById(`s-${s.id}-pill`); if (pill) pill.innerHTML = srcStatus(s);
+    }
+    return;
+  }
+  if (e.target.id !== 'wProject' && e.target.id !== 'wIdent') return;
+  syncWizard();
+  $('#cmdText').textContent = setupCommands();
+  $('#wIdent').value = W.conn.ident;
+});
+
+$('#wizBody').addEventListener('click', e => {
+  const tp = e.target.closest('[data-tpl]');
+  if (tp) {
+    syncWizard();
+    if (Object.values(DEFAULTS).some(([n]) => n === W.name)) [W.name, W.purpose] = DEFAULTS[tp.dataset.tpl];
+    W.tpl = tp.dataset.tpl; W.res = [TEMPLATES[W.tpl].resources[0]]; W.caps = clone(TEMPLATES[W.tpl].caps);
+    if (W.tpl !== 'inc') W.conn = defaultConn(W.tpl, W.name);
+    W.srcs = defaultSrcs(W.name);
+    renderWizard(); return;
+  }
+  const on = e.target.closest('[data-src-on]');
+  if (on) { syncSrcs(); const s = W.srcs.find(x => x.id === on.dataset.srcOn); s.on = on.checked; if (!s.on) { s.tested = false; s.checks = []; s.err = ''; } renderWizard(); return; }
+  const ts = e.target.closest('[data-test-src]');
+  if (ts) { syncSrcs(); testSource(ts.dataset.testSrc); return; }
+  if (e.target.closest('[data-test]')) { syncWizard(); testConnection(); return; }
+  if (e.target.closest('[data-copy]')) {
+    const btn = e.target.closest('[data-copy]'), pre = document.getElementById(btn.dataset.copy || 'cmdText');
+    const fallback = () => { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = 'Selected — press Ctrl/Cmd+C'; };
+    try { navigator.clipboard.writeText(pre.textContent).then(() => { btn.textContent = 'Copied'; }, fallback); } catch (_) { fallback(); }
+    return;
+  }
+  const cb = e.target.closest('[data-cap]');
+  if (cb) { W.caps[+cb.dataset.cap].mode = cb.dataset.mode; renderWizard(); }
+});
+$('#wizBack').addEventListener('click', () => { syncWizard(); W.err = ''; if (W.step === 0) closeWizard(); else { W.step--; renderWizard(); } });
+$('#wizNext').addEventListener('click', () => {
+  syncWizard(); W.err = '';
+  if (W.step === 0 && !W.name) W.err = 'Give the agent a name.';
+  if (W.step === 0 && W.name) {
+    // name drives the default identity until the user connects
+    const fresh = defaultConn(W.tpl, W.name);
+    const g = W.srcs.find(s => s.id === 'gke');
+    if (!g.tested) g.ident = `devops-agent-${fresh.sa.replace('devops-agent-', '')}@${g.project}.iam.gserviceaccount.com`;
+    if (!W.conn.tested) Object.assign(W.conn, { sa: fresh.sa, ident: W.conn.provider === 'gcp' ? `${fresh.sa}@${W.conn.project}.iam.gserviceaccount.com` : `arn:aws:iam::${W.conn.project}:role/${fresh.sa}` });
+  }
+  if (W.step === 1 && W.tpl === 'inc') {
+    const on = W.srcs.filter(s => s.on);
+    if (!on.length) W.err = 'Turn on at least one data source.';
+    else if (on.some(s => s.testing)) W.err = 'Wait for the connection tests to finish.';
+    else if (on.some(s => !s.tested)) W.err = `Test every source you turned on: ${on.filter(s => !s.tested).map(s => SOURCES[s.id].name).join(', ')}.`;
+  }
+  else if (W.step === 1 && W.conn.testing) W.err = 'Wait for the connection test to finish.';
+  else if (W.step === 1 && !W.conn.tested) W.err = 'Test the connection first. The agent cannot be created without a working connection.';
+  else if (W.step === 1 && !W.res.length) W.err = 'Select at least one resource. An agent with no infrastructure cannot do anything.';
+  if (W.err) { renderWizard(); return; }
+  if (W.step < 3) { W.step++; renderWizard(); return; }
+  const inv = W.tpl === 'inc', on = W.srcs.filter(s => s.on);
+  const a = makeAgent('a' + Date.now(), W.name, W.tpl, W.purpose || TEMPLATES[W.tpl].blurb,
+    inv ? on.map(s => `${SOURCES[s.id].name}: ${srcWhere(s)}`) : W.res.slice(), clone(W.caps),
+    inv ? undefined : { method: W.conn.provider === 'gcp' ? 'GCP service account impersonation' : 'AWS IAM role · AssumeRole + external ID', identity: W.conn.ident, verified: 'just now' });
+  if (inv) a.sources = on.map(s => ({ id: s.id, ...SOURCES[s.id], where: srcWhere(s), verified: 'just now',
+    ident: s.id === 'gke' ? s.ident : SOURCES[s.id].ident.replace('incident', slug(W.name)),
+    grants: s.id === 'es' ? [...idxList(s).map(i => 'read: ' + i), 'view_index_metadata'] : SOURCES[s.id].grants }));
+  a.thread.push({ k: 'agent', html: `<p>${esc(a.name)} is ready. I can work on ${a.resources.map(r => `<code>${esc(r)}</code>`).join(', ')} and nothing else.</p>` });
+  a.log.push({ t: now(), x: 'Agent created by you' });
+  S.agents.push(a); S.current = a;
+  closeWizard(); render();
+});
+$('#newAgent').addEventListener('click', openWizard);
+$('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeWizard(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeWizard(); });
+
+render();
+</script>
