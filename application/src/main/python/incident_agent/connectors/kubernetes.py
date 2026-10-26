@@ -115,6 +115,10 @@ class Kubernetes(Connector):
                 try:
                     cfg = yaml.safe_load(pasted)
                     api_client = config.new_client_from_config_dict(cfg, context=self.settings.get("context") or None)
+                except yaml.YAMLError as e:  # its message quotes the bad line, which may hold the token
+                    mark = getattr(e, "problem_mark", None)
+                    where = f" at line {mark.line + 1}" if mark else ""
+                    raise ConnectorError(f"{self.type}: invalid kubeconfig: not valid YAML{where}") from e
                 except Exception as e:
                     raise ConnectorError(f"{self.type}: invalid kubeconfig: {type(e).__name__}: {e}") from e
                 self.api = self._make_api(api_client)

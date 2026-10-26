@@ -1,7 +1,9 @@
 """Summarizer: normalized connector result -> one line the model can read.
 
-Raw log lines never reach the model (cost, prompt injection, secrets). This
-version is plain code; swap in a fast model (Haiku) when results get fuzzy.
+Whole results never reach the model (cost, prompt injection, secrets): only these
+lines, where a few example log messages are cut short and personal data and
+credentials in them are masked (redact). This version is plain code; swap in a
+fast model (Haiku) when results get fuzzy.
 """
 
 
@@ -17,12 +19,38 @@ def _clip(s: str, n: int = 70) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# Personal data and credentials in log text: masked before the line reaches the model, the database or the UI.
+# Order matters: whole tokens (JWT, key=value) before the shorter patterns inside them.
+_REDACT = [
+    (re.compile(r"\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*"), "[jwt]"),
+    (re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|app[_-]?key|access[_-]?key|authorization)"
+                r"(\"?\s*[:=]\s*\"?)(?:(?:bearer|basic)\s+)?[^\s\"',;&}]+"), r"\1\2[secret]"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[\w.~+/=-]{8,}"), r"\1 [secret]"),
+    (re.compile(r"[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}"), "[email]"),
+    (re.compile(r"(?<![\w.:])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"), "[ip]"),
+    (re.compile(r"(?i)(?<![\w:])(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}(?![\w:])"), "[ip]"),
+    # card / account numbers: 15-19 digits (a 13-digit epoch-ms timestamp stays)
+    (re.compile(r"(?<![\w-])(?:\d[ -]?){14,18}\d(?![\w-])"), "[number]"),
+    (re.compile(r"(?<![\w+/])\+\d{8,14}(?!\w)"), "[phone]"),
+    # long keys and base64 blobs: upper, lower and digits mixed, no "/" (pod names, hex ids, SHAs and URL paths stay)
+    (re.compile(r"(?<![\w/+=-])(?=[\w+-]*[A-Z])(?=[\w+-]*[a-z])(?=[\w+-]*\d)[A-Za-z0-9+_-]{32,}={0,2}(?![\w/+=-])"),
+     "[secret]"),
+]
+
+
+def redact(s: str) -> str:
+    """Mask emails, IP addresses, tokens, `password=...` values and long numbers or keys in free text."""
+    for pattern, repl in _REDACT:
+        s = pattern.sub(repl, s)
+    return s
+
+
 def clean_log(line: str, n: int = 200) -> str:
-    """A log line without the prefixes that carry no meaning, so the message itself fits."""
+    """A log line without the prefixes that carry no meaning, so the message itself fits; personal data masked."""
     s = str(line)
     for pattern in _LOG_NOISE:
         s = pattern.sub("", s, count=0 if pattern.pattern.startswith("(?:") else 1)
-    return _clip(s.rstrip("'\""), n)
+    return _clip(redact(s.rstrip("'\"")), n)
 
 
 def _pods(data: dict) -> str:

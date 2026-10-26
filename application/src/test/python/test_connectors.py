@@ -437,3 +437,11 @@ def test_kubernetes_bad_kubeconfig_is_clear_error():
     k = Kubernetes(["deploys.list"], {"namespaces": ["x"]}, secrets={"kubeconfig": "not: [valid"})
     with pytest.raises(ConnectorError, match="invalid kubeconfig"):
         k.test_connection()
+
+
+def test_kubernetes_bad_kubeconfig_error_does_not_quote_the_token():
+    bad = "apiVersion: v1\nusers:\n- name: u\n  user:\n    token: SECRET-abc123: x: y\n"
+    k = Kubernetes(["deploys.list"], {"namespaces": ["x"]}, secrets={"kubeconfig": bad})
+    with pytest.raises(ConnectorError) as e:
+        k.test_connection()
+    assert "SECRET" not in str(e.value) and "not valid YAML at line 5" in str(e.value)

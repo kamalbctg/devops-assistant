@@ -614,6 +614,31 @@ def test_log_lines_lose_their_noise_prefixes():
     assert clean_log("b'2026-10-25T13:45:27.957912979Z Loading feature flags'") == "Loading feature flags"
 
 
+def test_log_lines_mask_personal_data_and_credentials():
+    from incident_agent.agent.summarize import clean_log
+    masked = {
+        "[Client IP]: extracted client ip = 203.0.113.7 source = XFF": "[Client IP]: extracted client ip = [ip] source = XFF",
+        "login failed for jane.doe+x@example.co.uk": "login failed for [email]",
+        "Authorization: Bearer abcDEF123456789.xyz": "Authorization: [secret]",
+        "connect failed password=hunter2secret user=app": "connect failed password=[secret] user=app",
+        '{"api_key": "abc123def456"}': '{"api_key": "[secret]"}',
+        "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sig rejected": "token [jwt] rejected",
+        "charge 4111 1111 1111 1111 declined": "charge [number] declined",
+        "sms to +8801712345678 failed": "sms to [phone] failed",
+        "key AKIAIOSFODNN7EXAMPLEwJalrXUtnFEMIK7MDENG used": "key [secret] used",
+    }
+    for line, want in masked.items():
+        assert clean_log(line) == want, line
+    kept = [  # ids and names an investigation needs stay readable
+        "[503] GET /api/v1/chatflows from stage-verbex-api-gateway-service-6f9c8b7d5-x2k4q",
+        "trace 4bf92f3577b34da6a3ce929d0e0e4736 orgId: 1f0c2a9e-7b3d-4c11-9a52-0e6f3c1d2b4a",
+        "image sha 5f0904f99153a9d3238a3e078e9e at 1792768000000 v1.0.5-SNAPSHOT",
+        "see https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503 for details",
+    ]
+    for line in kept:
+        assert clean_log(line) == line, line
+
+
 def test_traces_say_whether_5xx_came_from_downstream(monkeypatch):
     from incident_agent.agent.summarize import summarize
     dd = live_datadog()
