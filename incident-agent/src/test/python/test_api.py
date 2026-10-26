@@ -18,6 +18,7 @@ from incident_agent.service.investigation_service import InvestigationService
 def env(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBHOOK_TOKEN", "s3cret")
     monkeypatch.setenv("SEED_DEMO", "false")
+    monkeypatch.setenv("ALLOWED_HOSTS", "testserver")
     store = Store(f"sqlite:///{tmp_path / 'db.sqlite'}")
     box = SecretBox(Fernet.generate_key())
     seed_demo(store, box)
@@ -34,6 +35,13 @@ def client(env):
 @pytest.fixture
 def demo_agent(client):
     return client.get("/agents").json()[0]
+
+
+def as_pre_alembic(store):
+    """Make a test database look like one created before Alembic: same tables, no alembic_version."""
+    import sqlalchemy as sa
+    with store.engine.begin() as c:
+        c.execute(sa.text("DROP TABLE alembic_version"))
 
 
 def wait(client, run_id, until=("done", "failed", "waiting_input"), timeout=10):
@@ -131,7 +139,7 @@ def test_investigation_uses_agent_connectors(client, demo_agent):
     assert r.status_code == 201
     run = wait(client, r.json()["id"])
     assert run["status"] == "done" and run["verdict"]["confidence"] == "HIGH"
-    assert {a["connector"] for a in run["audit"]} == {"datadog", "elasticsearch", "gke"}
+    assert {a["connector"] for a in run["audit"]} == {"Demo Datadog", "Demo Elasticsearch", "Demo GKE"}
     assert run["events"][0]["node"] == "connect"
     assert client.get("/investigations").json()[0]["id"] == run["id"]  # stored
 
@@ -230,11 +238,23 @@ def test_llm_settings_and_agent_model(client, env, demo_agent, monkeypatch):
     assert demo_agent["llm"]["model"] == "scripted"
     a = client.post("/agents", json={"name": "Claude agent", "services": "checkout",
                                      "connector_ids": demo_agent["connector_ids"]}).json()
-    assert a["llm"] == {"model": "claude-opus-5-5", "fast_model": "claude-haiku-4-5", "effort": "medium"}
+    assert a["llm"] == {"model": "claude-opus-5-5", "fast_model": "claude-haiku-5-5", "effort": "medium"}
     assert a["llm_label"] == "Claude Opus 5.5 · medium effort"
     bad = client.post("/agents", json={"name": "y", "services": "checkout", "connector_ids": demo_agent["connector_ids"],
                                        "llm": {"model": "gpt-4"}})
     assert bad.status_code == 400
+
+
+def test_retired_model_moves_to_successor(env):
+    from incident_agent.config.llm import llm_values
+    store, _, _ = env
+    a = store.list_agents()[0]
+    store.update_agent(a["id"], {"llm": {"model": "claude-haiku-4-5", "fast_model": "claude-haiku-4-5", "effort": "low"}})
+    as_pre_alembic(store)
+    reopened = Store(str(store.engine.url))  # the baseline migration fixes databases made before Alembic
+    assert reopened.get_agent(a["id"])["llm"] == {"model": "claude-haiku-5-5", "fast_model": "claude-haiku-5-5",
+                                                  "effort": "low"}
+    assert llm_values({"model": "claude-haiku-4-5"})["model"] == "claude-haiku-5-5"
 
 
 def test_claude_agent_without_key_fails_clearly(env, monkeypatch):
@@ -242,11 +262,11 @@ def test_claude_agent_without_key_fails_clearly(env, monkeypatch):
     store, box, _ = env
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(ValueError, match="no Anthropic API key"):
-        make_planner({"model": "claude-opus-5-5", "fast_model": "claude-haiku-4-5", "effort": "medium"}, store, box)
-    assert type(make_planner({"model": "scripted", "fast_model": "claude-haiku-4-5", "effort": "medium"}, store, box)).__name__ == "ScriptedPlanner"
+        make_planner({"model": "claude-opus-5-5", "fast_model": "claude-haiku-5-5", "effort": "medium"}, store, box)
+    assert type(make_planner({"model": "scripted", "fast_model": "claude-haiku-5-5", "effort": "medium"}, store, box)).__name__ == "ScriptedPlanner"
     store.put_setting("llm", {"provider": "anthropic"}, box.encrypt({"api_key": "sk-test"}))
-    p = make_planner({"model": "claude-haiku-4-5", "fast_model": "claude-haiku-4-5", "effort": "high"}, store, box)
-    assert p.model == "claude-haiku-4-5" and p.strong.anthropic_api_key.get_secret_value() == "sk-test"
+    p = make_planner({"model": "claude-haiku-5-5", "fast_model": "claude-haiku-5-5", "effort": "high"}, store, box)
+    assert p.model == "claude-haiku-5-5" and p.strong.anthropic_api_key.get_secret_value() == "sk-test"
 
 
 def test_scripted_agent_with_live_connector_warns(client):
@@ -268,7 +288,7 @@ def test_llm_workspace_id(client, env, monkeypatch):
     assert info["key_set"] and info["workspace_id"] == "wrkspc_123"
     client.post("/llm/test", json={})
     assert seen == {"key": "sk-org", "ws": "wrkspc_123"}
-    p = make_planner({"model": "claude-opus-5-5", "fast_model": "claude-haiku-4-5", "effort": "medium"}, store, box)
+    p = make_planner({"model": "claude-opus-5-5", "fast_model": "claude-haiku-5-5", "effort": "medium"}, store, box)
     assert p.strong.default_headers == {"anthropic-workspace-id": "wrkspc_123"}
 
 
@@ -349,6 +369,7 @@ def test_old_agents_without_prompt_get_the_default_stored(tmp_path):
     seed_demo(store, box)
     with store.engine.begin() as c:
         c.execute(sa.update(agents).values(prompt=None))  # as saved by an older version
+    as_pre_alembic(store)
     store = Store(url)  # restart runs the migration
     assert all(a["prompt"] == DEFAULT_INSTRUCTIONS.strip() for a in store.list_agents())
 
@@ -367,3 +388,285 @@ def test_agent_analysis_fields_saved_and_in_result(client, demo_agent):
     assert run["status"] == "done", run.get("error")
     assert run["result"]["analysis"][0]["name"] == "failure_type"
     assert run["result"]["report"]["analysis"] == run["result"]["analysis"]
+
+
+# ---------------------------------------------------------------- hardening
+
+def test_restart_fails_runs_that_were_cut_off(env, demo_agent):
+    store, box, _ = env
+    store.save_investigation({"id": "orphan", "agent_id": demo_agent["id"], "agent_name": "x", "question": "q",
+                              "source": "chat", "status": "running", "created": time.time(), "dedup_key": None,
+                              "data": {"events": [], "audit": []}})
+    fresh = TestClient(create_app(store, box, InvestigationService(store, box, ScriptedPlanner)))
+    run = fresh.get("/investigations/orphan").json()
+    assert run["status"] == "failed" and "restarted" in run["error"]
+
+
+def test_webhook_routing_ignores_case(client):
+    alert = {"id": "9", "title": "t", "transition": "Triggered", "tags": "service:Checkout"}
+    r = client.post("/webhooks/datadog", json=alert, headers={"X-Webhook-Token": "s3cret"}).json()
+    assert r["status"] == "started"
+
+
+def test_bad_input_is_a_client_error(client, demo_agent):
+    body = {"groupKey": "g2", "alerts": [{"status": "firing", "labels": {"service": "billing"}, "startsAt": "garbage"}]}
+    assert client.post("/webhooks/alertmanager", json=body, headers={"X-Webhook-Token": "s3cret"}).status_code == 202
+    r = client.post("/agents", json={"name": "b", "connector_ids": demo_agent["connector_ids"],
+                                     "budget": {"max_tool_calls": None}})
+    assert r.status_code == 400
+
+
+def test_unknown_host_header_is_refused(client):
+    assert client.get("/healthz", headers={"host": "evil.example"}).status_code == 400
+
+
+def test_runs_show_the_agents_current_name(client, demo_agent):
+    r = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": demo_agent["id"]})
+    wait(client, r.json()["id"])
+    body = {**demo_agent, "name": "Renamed"}
+    assert client.put(f"/agents/{demo_agent['id']}", json=body).status_code == 200
+    assert client.get(f"/investigations/{r.json()['id']}").json()["agent"] == "Renamed"
+    runs = client.get("/investigations", params={"agent_id": demo_agent["id"]}).json()
+    assert runs and all(x["agent"] == "Renamed" and x["agent_id"] == demo_agent["id"] for x in runs)
+
+
+def test_delete_investigation(client, env, demo_agent):
+    store, _, service = env
+    r = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": demo_agent["id"]})
+    run_id = r.json()["id"]
+    wait(client, run_id)
+    config = {"configurable": {"thread_id": run_id}}
+    assert service.graph.get_state(config).values  # checkpoints exist
+    assert client.delete(f"/investigations/{run_id}").status_code == 204
+    assert client.get(f"/investigations/{run_id}").status_code == 404
+    assert not service.graph.get_state(config).values  # checkpoints removed too
+    assert client.delete(f"/investigations/{run_id}").status_code == 404
+
+    store.save_investigation({"id": "busy", "agent_id": demo_agent["id"], "agent_name": "x", "question": "q",
+                              "source": "chat", "status": "running", "created": time.time(), "dedup_key": None,
+                              "data": {"events": [], "audit": []}})
+    assert client.delete("/investigations/busy").status_code == 409
+
+
+# ---------------------------------------------------------------- retention
+
+def _old_run(store, agent_id, run_id, age_days, status="done"):
+    store.save_investigation({"id": run_id, "agent_id": agent_id, "agent_name": "x", "question": "q", "source": "chat",
+                              "status": status, "created": time.time() - age_days * 86400, "dedup_key": None,
+                              "data": {"events": [], "audit": []}})
+
+
+def test_retention_settings_are_validated(client, demo_agent):
+    assert demo_agent["retention"] == {"keep_days": 7, "max_investigations": 100}
+    for bad in ({"keep_days": 8}, {"keep_days": 0}, {"max_investigations": 101}, {"max_investigations": "x"}):
+        assert client.put(f"/agents/{demo_agent['id']}", json={**demo_agent, "retention": bad}).status_code == 400
+    r = client.put(f"/agents/{demo_agent['id']}", json={**demo_agent, "retention": {"keep_days": 3, "max_investigations": 5}})
+    assert r.json()["retention"] == {"keep_days": 3, "max_investigations": 5}
+
+
+def test_old_investigations_are_purged(env, demo_agent):
+    store, box, service = env
+    _old_run(store, demo_agent["id"], "fresh", 2)
+    _old_run(store, demo_agent["id"], "stale", 8)
+    _old_run(store, "deleted-agent", "orphan", 8)
+    _old_run(store, demo_agent["id"], "old-but-running", 8, status="running")
+    service.active["old-but-running"] = None  # still in this process: must not be touched
+    assert service.purge_expired() == 2
+    assert store.get_investigation("fresh") and store.get_investigation("old-but-running")
+    assert store.get_investigation("stale") is None and store.get_investigation("orphan") is None
+
+
+def test_shorter_retention_per_agent(client, env, demo_agent):
+    store, _, service = env
+    client.put(f"/agents/{demo_agent['id']}", json={**demo_agent, "retention": {"keep_days": 1, "max_investigations": 100}})
+    _old_run(store, demo_agent["id"], "two-days", 2)
+    service.purge_expired()
+    assert store.get_investigation("two-days") is None
+
+
+def test_limit_refuses_new_investigations(client, env, demo_agent):
+    store, _, _ = env
+    client.put(f"/agents/{demo_agent['id']}", json={**demo_agent, "retention": {"keep_days": 7, "max_investigations": 2}})
+    _old_run(store, demo_agent["id"], "a", 0)
+    _old_run(store, demo_agent["id"], "b", 0)
+    r = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": demo_agent["id"]})
+    assert r.status_code == 409 and "2 of 2" in r.json()["detail"]
+    alert = {"id": "77", "title": "t", "transition": "Triggered", "tags": "service:checkout"}
+    w = client.post("/webhooks/datadog", json=alert, headers={"X-Webhook-Token": "s3cret"}).json()
+    assert w["status"] == "refused"
+    assert client.delete("/investigations/a").status_code == 204
+    assert client.post("/investigations", json={"question": "Checkout is slow since 10:04",
+                                                "agent_id": demo_agent["id"]}).status_code == 201
+
+
+# ---------------------------------------------------------------- prompt versions
+
+def test_prompt_versions(client, env, demo_agent):
+    _, _, service = env
+    aid = demo_agent["id"]
+    assert demo_agent["prompt_version"] == 1  # the seeded agent's prompt is v1
+    v1 = client.get(f"/agents/{aid}/prompt-versions").json()
+    assert [v["version"] for v in v1] == [1]
+
+    # saving without a prompt change makes no new version
+    assert client.put(f"/agents/{aid}", json={**demo_agent, "description": "x"}).json()["prompt_version"] == 1
+    r = client.put(f"/agents/{aid}", json={**demo_agent, "prompt": "Look at pods first.", "prompt_note": "pods first"})
+    assert r.json()["prompt_version"] == 2
+    versions = client.get(f"/agents/{aid}/prompt-versions").json()
+    assert [(v["version"], v["note"]) for v in versions][0] == (2, "pods first")
+    assert client.get(f"/agents/{aid}/prompt-versions/1").json()["prompt"] == v1[0]["prompt"]
+    assert client.get(f"/agents/{aid}/prompt-versions/9").status_code == 404
+
+    # an investigation records the version it ran with
+    run = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": aid}).json()
+    assert wait(client, run["id"])["prompt_version"] == 2
+
+
+def test_make_an_old_prompt_version_current_without_copying(client, env, demo_agent):
+    store, _, _ = env
+    aid = demo_agent["id"]
+    v1_text = demo_agent["prompt"]
+    client.put(f"/agents/{aid}", json={**demo_agent, "prompt": "Look at pods first.", "prompt_note": "pods first"})
+
+    a = client.post(f"/agents/{aid}/prompt-versions/1/activate").json()
+    assert a["prompt_version"] == 1 and a["prompt"] == v1_text  # no v3 copy
+    assert [v["version"] for v in client.get(f"/agents/{aid}/prompt-versions").json()] == [2, 1]
+    assert store.get_agent(aid)["prompt"] == v1_text  # what the next investigation runs with
+    assert client.post(f"/agents/{aid}/prompt-versions/9/activate").status_code == 404
+
+    # saving the form unchanged keeps v1; an edit becomes v3, based on v1
+    assert client.put(f"/agents/{aid}", json={**a, "description": "x"}).json()["prompt_version"] == 1
+    assert client.put(f"/agents/{aid}", json={**a, "prompt": v1_text + "\nAlso check DNS."}).json()["prompt_version"] == 3
+
+    run = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": aid}).json()
+    assert wait(client, run["id"])["prompt_version"] == 3
+
+
+def test_agents_saved_before_the_pointer_use_their_newest_version(tmp_path):
+    import sqlalchemy as sa
+    url = f"sqlite:///{tmp_path / 'old.sqlite'}"
+    store = Store(url)
+    a = store.create_agent({"name": "Old", "services": [], "connector_ids": [], "budget": {}, "prompt": "one"})
+    store.update_agent(a["id"], {"prompt": "two"})
+    with store.engine.begin() as c:
+        c.execute(sa.text("UPDATE agents SET prompt_version = NULL"))
+    as_pre_alembic(store)
+    assert Store(url).get_agent(a["id"])["prompt_version"] == 2
+
+
+def test_run_is_not_pinned_to_a_prompt_version(env, demo_agent):
+    store, _, service = env
+    aid = demo_agent["id"]
+    store.update_agent(aid, {"prompt": "first text"})
+    run = service.start("Checkout is slow since 10:04", aid)
+    store.update_agent(aid, {"prompt": "edited later"})
+    from incident_agent.service.investigation_service import Run
+    r = Run.from_row(store.get_investigation(run["id"]))
+    ctx = service._context(r)
+    assert ctx.agent.prompt == "edited later" and r.prompt_version == store.prompt_version(aid)["version"]
+
+
+# ---------------------------------------------------------------- schema migrations (Alembic)
+
+def test_migrations_match_the_table_definitions(tmp_path):
+    """Fails when a table in store.py changed without a migration (`uv run alembic revision --autogenerate`)."""
+    from alembic import command
+    from incident_agent.persistence.schema import alembic_config, current_revision
+    store = Store(f"sqlite:///{tmp_path / 'new.sqlite'}")
+    assert current_revision(store.engine) is not None
+    with store.engine.connect() as conn:
+        command.check(alembic_config(conn))
+
+
+def head_revision():
+    from alembic.script import ScriptDirectory
+    from incident_agent.persistence.schema import alembic_config
+    return ScriptDirectory.from_config(alembic_config()).get_current_head()
+
+
+def test_database_from_before_alembic_is_upgraded_and_keeps_its_data(tmp_path):
+    import sqlalchemy as sa
+    from alembic import command
+    from incident_agent.agent.prompts import DEFAULT_INSTRUCTIONS
+    from incident_agent.persistence.schema import alembic_config, current_revision
+    url = f"sqlite:///{tmp_path / 'old.sqlite'}"
+    engine = sa.create_engine(url)
+    with engine.begin() as c:  # an early version's schema (as create_all made it): no later columns, no prompt_versions
+        c.execute(sa.text("CREATE TABLE connectors (id VARCHAR(32) NOT NULL, name VARCHAR(200) NOT NULL, "
+                          "type VARCHAR(50) NOT NULL, mode VARCHAR(10) NOT NULL, provides JSON NOT NULL, "
+                          "settings JSON NOT NULL, secrets TEXT, status VARCHAR(20) NOT NULL, status_detail TEXT, "
+                          "tested_at FLOAT, created_at FLOAT NOT NULL, updated_at FLOAT NOT NULL, "
+                          "PRIMARY KEY (id), UNIQUE (name))"))
+        c.execute(sa.text("CREATE TABLE agents (id VARCHAR(32) NOT NULL, name VARCHAR(200) NOT NULL, "
+                          "description TEXT, services JSON NOT NULL, connector_ids JSON NOT NULL, budget JSON NOT NULL, "
+                          "timezone VARCHAR(64) NOT NULL, created_at FLOAT NOT NULL, updated_at FLOAT NOT NULL, "
+                          "PRIMARY KEY (id), UNIQUE (name))"))
+        c.execute(sa.text("CREATE TABLE investigations (id VARCHAR(32) NOT NULL, agent_id VARCHAR(32) NOT NULL, "
+                          "agent_name VARCHAR(200), question TEXT NOT NULL, source VARCHAR(30) NOT NULL, "
+                          "status VARCHAR(20) NOT NULL, created FLOAT NOT NULL, dedup_key VARCHAR(300), data JSON NOT NULL, PRIMARY KEY (id))"))
+        c.execute(sa.text("CREATE TABLE settings (id VARCHAR(50) NOT NULL, value JSON NOT NULL, secrets TEXT, "
+                          "updated_at FLOAT NOT NULL, PRIMARY KEY (id))"))
+        c.execute(sa.text("INSERT INTO agents VALUES ('a1', 'Old', NULL, '[]', '[]', '{}', 'UTC', 1, 2)"))
+        c.execute(sa.text("INSERT INTO investigations VALUES ('r1', 'a1', 'Old', 'q', 'chat', 'done', 3, NULL, '{}')"))
+
+    store = Store(url)
+    a = store.get_agent("a1")
+    assert a["type"] == "incident_investigation" and a["prompt"] == DEFAULT_INSTRUCTIONS.strip()
+    assert a["llm"]["model"] == "scripted" and a["prompt_version"] == 1
+    assert [v["note"] for v in store.prompt_versions("a1")] == ["first saved version"]
+    assert store.get_investigation("r1")["question"] == "q"
+    assert current_revision(store.engine) == head_revision()
+    with store.engine.connect() as conn:
+        command.check(alembic_config(conn))  # same schema as a new database
+    assert Store(url).get_agent("a1") == a  # starting again changes nothing
+
+
+SHERLOCK_V2_WITH_ENVIRONMENT = """1. Read the alert first
+- Work out exactly what the monitor measures.
+
+2. Use the right environment
+- Prod and stage are separate systems.
+
+3. Search for the condition, not for generic "error"
+- 5xx monitor: logs for the status codes.
+
+4. Check what changed
+- Deploys just before the start.
+"""
+SHERLOCK_V2_WITHOUT = """1. Read the alert first
+- Work out exactly what the monitor measures.
+
+2. Search for the condition, not for generic "error"
+- 5xx monitor: logs for the status codes.
+
+3. Check what changed
+- Deploys just before the start.
+"""
+
+
+@pytest.mark.parametrize("saved_as_v3", [False, True])
+def test_0002_removes_the_environment_section_from_sherlock_v2(tmp_path, saved_as_v3):
+    import threading
+
+    import sqlalchemy as sa
+    from incident_agent.persistence.schema import upgrade
+    from incident_agent.persistence.store import agents
+    url = f"sqlite:///{tmp_path / 'db.sqlite'}"
+    engine = sa.create_engine(url)
+    upgrade(engine, "0001")
+    store = Store.__new__(Store)  # store methods on the 0001 schema, without upgrading
+    store.engine, store.lock = engine, threading.Lock()
+    store._insert(agents, {"id": "d0a9078b6798", "name": "Sherlock", "type": "incident_investigation", "services": [],
+                   "connector_ids": [], "budget": {}, "timezone": "UTC", "created_at": 1, "updated_at": 1})
+    store.save_prompt_version("d0a9078b6798", "v1 text", "first")
+    store.save_prompt_version("d0a9078b6798", SHERLOCK_V2_WITH_ENVIRONMENT, "skill")
+    if saved_as_v3:
+        store.save_prompt_version("d0a9078b6798", SHERLOCK_V2_WITHOUT, "env removed")
+
+    store = Store(url)  # upgrades to head
+    assert [v["version"] for v in store.prompt_versions("d0a9078b6798")] == [2, 1]
+    v2 = store.prompt_version("d0a9078b6798", 2)
+    assert v2["prompt"] == SHERLOCK_V2_WITHOUT and "environment section removed" in v2["note"]
+    a = store.get_agent("d0a9078b6798")
+    assert a["prompt_version"] == 2 and a["prompt"] == SHERLOCK_V2_WITHOUT
+    assert Store(url).prompt_version("d0a9078b6798", 2) == v2  # nothing more on the next start

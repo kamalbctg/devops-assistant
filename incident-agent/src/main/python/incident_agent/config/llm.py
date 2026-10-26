@@ -3,19 +3,31 @@ and a model choice per agent (agent form)."""
 
 import os
 
-MODELS = [
-    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "note": "best reasoning", "effort": True},
-    {"id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5", "note": "strong, cheaper", "effort": True},
-    {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5", "note": "fastest, cheapest", "effort": False},
+MODELS = [  # note: short, in the dropdown; use_for: shown under it for the selected model
+    {"id": "claude-fable-5-1", "label": "Claude Fable 5.1", "note": "hardest incidents", "effort": True,
+     "use_for": "For the hardest incidents: long cause chains across many systems, or when Opus does not find "
+                "the root cause. Most capable; slowest, about 2.5x the cost of Opus. "
+                "Needs 30-day data retention on the Anthropic organization."},
+    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "note": "default · complex incidents", "effort": True,
+     "use_for": "Default. Best for complex or unclear incidents: several services, many signals, no obvious cause. "
+                "Thorough root-cause analysis at a moderate cost."},
+    {"id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5", "note": "most incidents", "effort": True,
+     "use_for": "Best for everyday incidents: one service, a clear alert, a few signals to check. "
+                "Good reasoning at half the cost of Opus."},
+    {"id": "claude-haiku-5-5", "label": "Claude Haiku 5.5", "note": "quick lookups", "effort": True,
+     "use_for": "Best for simple, direct questions: list pods, show recent errors, did it restart? "
+                "Fastest and cheapest; weak at multi-step root cause."},
 ]
 SCRIPTED = "scripted"  # fixed rules for the demo incident, no LLM
 EFFORTS = ["low", "medium", "high"]
-DEFAULT_LLM = {"model": "claude-opus-5-5", "fast_model": "claude-haiku-4-5", "effort": "medium"}
+DEFAULT_LLM = {"model": "claude-opus-5-5", "fast_model": "claude-haiku-5-5", "effort": "medium"}
+LEGACY_MODELS = {"claude-haiku-4-5": "claude-haiku-5-5"}  # retired from the list: saved agents move to the successor
 MODEL_IDS = {m["id"] for m in MODELS}
 
 
 def llm_values(data: dict | None) -> dict:
     llm = {**DEFAULT_LLM, **(data or {})}
+    llm = {k: LEGACY_MODELS.get(v, v) for k, v in llm.items()}
     if llm["model"] != SCRIPTED and llm["model"] not in MODEL_IDS:
         raise ValueError(f"unknown model {llm['model']!r}")
     if llm["fast_model"] not in MODEL_IDS:

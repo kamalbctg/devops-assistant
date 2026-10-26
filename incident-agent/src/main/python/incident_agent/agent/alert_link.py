@@ -21,15 +21,18 @@ def parse_datadog_link(text: str) -> dict | None:
 
     def ts(key):
         try:
-            return datetime.fromtimestamp(int(q[key][0]) / 1000, timezone.utc)
+            n = int(q[key][0])
         except (KeyError, ValueError, IndexError):
             return None
+        # from_ts / to_ts are epoch milliseconds, link_event_ts is epoch seconds
+        return datetime.fromtimestamp(n / 1000 if n > 10**11 else n, timezone.utc)
 
     alert_at = ts("event_ts") or ts("link_event_ts") or ts("to_ts")
     start = ts("from_ts")
     end = ts("to_ts")
     group = {k: v for k, v in (p.split(":", 1) for p in unquote(q.get("group", [""])[0]).split(",") if ":" in p)}
-    return {"monitor_id": m.group(1), "alert_at": alert_at, "from": start, "to": end, "group": group}
+    env = group.get("env") or next(iter(re.findall(r"\benv:([\w.-]+)", unquote(q.get("q", [""])[0]))), None)
+    return {"monitor_id": m.group(1), "alert_at": alert_at, "from": start, "to": end, "group": group, "env": env}
 
 
 def window_from_link(link: dict) -> tuple[str, str]:

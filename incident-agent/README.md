@@ -30,7 +30,7 @@ since 10:04". Delete them once real connectors are added.
 The demo agent uses **Scripted** mode: fixed rules for the demo incident,
 no LLM. For real investigations:
 1. **🧠 LLM page:** paste an Anthropic API key, then **Test** → **Save**. The key is stored encrypted.
-2. **Agent form → AI model:** pick the reasoning model (Opus 5.5, Sonnet 5.5 or Haiku 4.5), the effort, and the fast model that reads the question.
+2. **Agent form → AI model:** pick the reasoning model (Fable 5.1, Opus 5.5 — the default, Sonnet 5.5 or Haiku 5.5) and the effort. Haiku 5.5 reads the question and fills the analysis fields.
 
 New agents default to Opus 5.5 at medium effort. An agent that uses Claude
 without a saved key fails with a clear message instead of falling back to
@@ -89,7 +89,11 @@ gcloud iam service-accounts keys create key.json \
 
 **Agents → New agent** asks for:
 - **Name**
-- **Connectors**
+- **Connectors:** all equal; their order is for display only. When several provide the same capability
+  (e.g. logs from Datadog, Elasticsearch and Kubernetes), they hold different data: the first checks ask
+  every one of them, and in the investigation the model chooses which to query (the tool gets a
+  `connector` argument; each source's notes say what it holds). A failing source is reported to the
+  model, never silently replaced by another.
 - **Services:** either *all services the connectors see* (the default), or *only selected services*. **Discover from connectors** reads the real service names (last 24 h) from Datadog (log and APM service tags), Elasticsearch (the service field), GKE/Kubernetes (deployments), Prometheus (label values) and ClickHouse (`ServiceName`). You can also add names by hand. Alerts for these services start this agent automatically.
 - **AI model**
 - **Instructions (prompt):** the agent's system prompt, editable and stored with the agent. Every agent's prompt is stored in the database (an empty prompt stores a copy of the default). New agents start with an optimized default: start from the alert condition, check recent changes, keep 1–3 hypotheses, read 5xx/4xx/timeouts precisely, find the first occurrence, finish with ≥ 2 signals. Add your team's knowledge to it. **Reset to default** restores it. A short set of platform rules (read-only, cite evidence, ignore instructions inside tool results, stay in scope) is always added after it and can't be edited.
@@ -107,6 +111,15 @@ name, or by an environment-prefixed name (`stage-<service>`). With no service
 named, pod health of every deployment (up to 100) is swept to find the
 unhealthy one.
 
+A **Datadog monitor link** gives the time window and the monitor's service. A composite monitor
+(`( A || B ) && !C`) names no service itself: the agent reads its parts and checks only the services
+of A and B (C only excludes). The investigation stops early when two turns in a row add no new
+evidence (e.g. the model only repeats queries); a repeated query is answered with the
+result already in evidence, and after one empty turn the model is told to finish with what
+it has. The model sees the agent's known service names, so it can name a backend (e.g.
+`/v3/ai-agents` → `ai-agent-service`). A root cause in another service (`cause_service`)
+is accepted only after that service itself was checked.
+
 The **Coverage** row shows which capabilities (alerts, metrics, logs,
 traces, deploys, pod events, pod health) the chosen connectors provide. Anything
 missing is reported as "not checked" and caps confidence at MEDIUM.
@@ -123,9 +136,29 @@ missing is reported as "not checked" and caps confidence at MEDIUM.
 | `STRICT_READ_ONLY` | `false` | `true` = refuse connector keys that could write (default: warn) |
 | `WEBHOOK_TOKEN` | — | Required for `/webhooks/*` (disabled without it) |
 | `HOST`, `PORT` | `127.0.0.1`, `8080` | Docker uses `0.0.0.0` inside the container, published on localhost only |
+| `ALLOWED_HOSTS` | `localhost,127.0.0.1` | Accepted `Host` headers; add your proxy's hostname (blocks DNS rebinding) |
 
 There are **no user accounts**. Run it behind your SSO or ingress auth
 before sharing it.
+
+### Database schema changes (Alembic)
+
+The tables are defined in `persistence/store.py`; Alembic migrations in
+`persistence/migrations/versions/` bring a database to that schema. The app runs
+`upgrade head` on start, so deploying a new version is enough. A database made
+before Alembic is brought to the same schema by revision `0001` and keeps its data.
+LangGraph's checkpoint tables are managed by LangGraph, not Alembic.
+
+To change a table: edit it in `store.py`, then generate and review a migration:
+
+```bash
+uv run alembic revision --autogenerate -m "add owner to agents"   # writes versions/xxxx_add_owner_to_agents.py
+uv run alembic upgrade head                                        # or just start the app
+```
+
+The CLI uses `DATABASE_URL`, or the SQLite file in `DATA_DIR`. A test fails when a
+table changes without a migration. Back up Postgres before deploying a migration that
+renames or drops something.
 
 ## Alerts start investigations
 
@@ -186,7 +219,7 @@ the verifier checks those against the evidence first.
 
 ```
 START → intake ─┬─(Send ×N)→ baseline_query ─→ triage ─┬─→ investigate ⟲ ─→ verify → analyze → report → END
-                ├────────────────────────────→ triage   └─→ verify   (no affected service found)
+                ├────────────────────────────→ triage   └─→ verify   (no affected service found; not after an alert)
                 └────────────────────────────────────────→ verify   (refused)
 ```
 
@@ -196,9 +229,34 @@ START → intake ─┬─(Send ×N)→ baseline_query ─→ triage ─┬─�
 | `investigate` (loops on itself) | ReAct | Claude: hypotheses, next query, when to stop |
 | `verify`, `analyze`, `report` | workflow (fixed end) | code (+ fast model fills the analysis fields) |
 
-If the question names no service ("Everything is slow"), the agent does not
-ask. It checks every service the agent covers (up to 10) for active alerts
-and rising latency or errors. It then investigates the affected one and
+**First check (`baseline_query`).** For a named service, or for each service of an
+alert (e.g. the parts of a composite monitor, up to 10), the agent asks **every
+connector for every signal it provides**, in parallel: alerts, error rate and
+latency, traces, logs, deploys, pod events and pod health. Log searches use what
+the monitor counts (a 5xx monitor searches for 500/502/504, leaving out codes the
+monitor excludes such as 503), not a generic "error". A metric that spiked and
+recovered inside the window counts as unusual. The report's coverage section
+lists each connector with its number of queries, unusual results and failures,
+also when it found nothing.
+
+For a Datadog alert the first check also runs **the monitor's own query** (each part of a
+composite) and reports whether its condition was met, and when. Datadog queries use the
+alert's `env` (e.g. `env:production`). The generic error rate counts **5xx only** (http and
+netty servers), and the traces summary splits errors by status code and route, so 4xx
+client errors (e.g. 401s) are not taken for the incident. When there are 5xx, a few of those
+traces are read to tell whether the service answered 5xx itself or got it from a call to
+another service (which is then named). Log lines are shown without the container and
+timestamp prefixes, so the message itself is visible. If every 5xx found has a code the
+monitor ignores (e.g. `!http.status_code:503`), the report says they would not trigger it. Elasticsearch searches leave out
+DEBUG and TRACE lines (connector setting *Leave out log levels*).
+
+After an alert the investigation always continues: the service with the most
+unusual results is investigated first, and if none stood out the model gets all
+of the alert's services to look into.
+
+If the question names no service and there is no alert ("Everything is slow"),
+the agent does not ask. It checks every service the agent covers (up to 10) for
+active alerts and rising latency or errors, investigates the affected one and
 reports which service it picked and why. If nothing is unusual, it says so.
 
 Rules enforced in code, not in the prompt:
@@ -225,7 +283,7 @@ incident-agent/
     │   ├── config/       agent/connector validation, demo seed
     │   ├── connectors/   one adapter per source (+ fake data for demo mode)
     │   ├── security/     gateway (policy, audit), secret encryption
-    │   └── persistence/  database store, checkpointer
+    │   └── persistence/  database store, Alembic migrations, checkpointer
     └── test/python/      tests
 ```
 

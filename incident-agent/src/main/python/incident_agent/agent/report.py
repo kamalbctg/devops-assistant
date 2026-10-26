@@ -16,6 +16,13 @@ CAP = {"alerts.list": "alerts", "metrics.query": "metrics", "logs.search": "logs
        "traces.search": "traces", "deploys.list": "deploys", "k8s.events": "pod events", "k8s.pods": "pod health"}
 
 
+def _monitor_excluded_codes(alert: dict | None) -> set[str]:
+    """Status codes a monitor leaves out, e.g. `!http.status_code:503` -> {"503"}."""
+    import re
+    text = " ".join([(alert or {}).get("query", ""), *(alert or {}).get("part_queries", [])])
+    return set(re.findall(r"!http\.status_code:(\d{3})", text))
+
+
 def build_report(state: dict, agent) -> dict:
     v = state["verdict"]
     head = {"question": state["question"], "agent": agent.name, "status": v.status, "confidence": v.confidence}
@@ -72,8 +79,13 @@ def build_report(state: dict, agent) -> dict:
     # 5. Recommendations
     recs = list(c.recommendations) if c else []
     if not c:
+        stop = state.get("stop_reason") or ""
         recs = ["Name the affected service and the start time, then investigate again"] if not scope.service else \
                ["Add connectors for: " + ", ".join(CAP.get(x, x) for x in v.not_checked)] if v.not_checked else \
+               ["The model stopped finding new evidence. Review the evidence below; investigate again with a "
+                "more specific question (service, error, time) if needed"] if stop.startswith("no progress") else \
+               ["Raise the agent's tool-call or turn budget (Edit agent → Limits), then investigate again"] \
+               if stop.startswith("budget") else \
                ["Widen the time window or raise the agent's tool-call budget, then investigate again"]
 
     # 5b. Hypotheses table
@@ -82,7 +94,18 @@ def build_report(state: dict, agent) -> dict:
 
     # 6. Coverage
     checked = sorted({(e.capability, e.connector) for e in evidence if e.connector != "-"})
+
+    def source_of(e):  # a failed query has no connector on it: the one it asked, or the only provider
+        providers = agent.connectors_for(e.capability)
+        return e.args.get("connector") or (e.connector if e.connector != "-" else None) or \
+            (providers[0].name if len(providers) == 1 else None)
+    by_connector = []
+    for conn in agent.connectors:  # every connector, also the ones that found nothing
+        evs = [e for e in evidence if source_of(e) == conn.name]
+        by_connector.append({"connector": conn.name, "type": conn.type, "queries": len(evs),
+                             "unusual": sum(e.anomalous for e in evs), "failed": sum(e.connector == "-" for e in evs)})
     coverage = {
+        "by_connector": by_connector,
         "checked": [{"capability": CAP.get(cap, cap), "source": src} for cap, src in checked],
         "not_checked": [CAP.get(x, x) for x in v.not_checked],
         "connectors_skipped": list(agent.skipped),
@@ -114,6 +137,12 @@ def build_report(state: dict, agent) -> dict:
         limits.append(f"stopped by budget ({state['stop_reason']}) — evidence may be incomplete")
     if t.get("skipped"):
         limits.append(f"only {len(t['checked'])} services were swept; not swept: {', '.join(t['skipped'])}")
+    excluded = _monitor_excluded_codes(scope.alert)
+    found_5xx = {code for e in evidence if e.capability == "traces.search" and e.data
+                 for code, _, _ in e.data.get("errors_by", []) if code.startswith("5")}
+    if excluded and found_5xx and found_5xx <= excluded:
+        limits.append(f"all 5xx found ({', '.join(sorted(found_5xx))}) are codes the monitor ignores "
+                      f"({', '.join(sorted(excluded))}): they would not trigger it — see the alert condition evidence")
     limits.append("correlation in time supports the cause but is not proof — confirm before acting")
 
     return {**head, "root_cause": root, "answer": answer, "impact": impact, "affected_pods": affected_pods,
@@ -170,6 +199,10 @@ def to_markdown(r: dict) -> str:
     out += ["", "## Recommendations"] + [f"{i}. {x}" for i, x in enumerate(r["recommendations"], 1)]
     cv = r["coverage"]
     out += ["", "## Investigation Coverage",
+            "Connectors: " + ("; ".join(
+                f"{x['connector']}: " + (f"{x['queries']} queries, {x['unusual']} unusual"
+                                         + (f", {x['failed']} failed" if x["failed"] else "") if x["queries"] else "not queried")
+                for x in cv.get("by_connector", [])) or "—"),
             "Checked: " + (", ".join(f"{x['capability']} ({x['source']})" for x in cv["checked"]) or "nothing"),
             "Not checked: " + (", ".join(cv["not_checked"]) or "—"),
             "Services: " + ", ".join(s for s in cv["services_checked"] if s),

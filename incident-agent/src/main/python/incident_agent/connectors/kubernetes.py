@@ -77,7 +77,7 @@ def _parse_line(raw: str) -> tuple[datetime | None, str]:
 
 class Kubernetes(Connector):
     type = "kubernetes"
-    supported = {"logs.search", "deploys.list", "k8s.events", "k8s.pods"}
+    capabilities = {"logs.search", "deploys.list", "k8s.events", "k8s.pods"}
     LABEL = "Kubernetes (kubeconfig)"
     DEFAULT_NOTES = NOTES.format(what="Kubernetes cluster (read-only).")
     FIELDS = [

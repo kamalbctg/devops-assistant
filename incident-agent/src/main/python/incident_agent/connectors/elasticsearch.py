@@ -16,7 +16,7 @@ from .base import Connector, ConnectorError
 
 class Elasticsearch(Connector):
     type = "elasticsearch"
-    supported = {"logs.search"}
+    capabilities = {"logs.search"}
     LABEL = "Elasticsearch"
     FIELDS = [
         {"key": "url", "label": "URL", "type": "text", "required": True, "help": "https://es.example.com:9200"},
@@ -27,6 +27,8 @@ class Elasticsearch(Connector):
         {"key": "message_keyword_field", "label": "Message keyword field", "type": "text",
          "help": "Keyword copy of the message for 'top messages' (e.g. message.keyword). "
                  "Leave empty when the message is plain text (e.g. log): example lines are shown instead."},
+        {"key": "exclude_levels", "label": "Leave out log levels", "type": "list", "default": ["DEBUG", "TRACE"],
+         "help": "Lines containing these words are not searched, so errors are not buried. Empty = search all."},
     ]
     DEFAULT_NOTES = """Application logs. logs_search matches `query` as text in the message field for the
 service within the time window, and returns the hit count, first-seen time and top or example
@@ -68,7 +70,10 @@ service name, field or window."""
         top = ({"terms": {"field": kw, "size": 3}} if kw else
                {"top_hits": {"size": 3, "sort": [{"@timestamp": "asc"}],
                              "_source": [self.settings.get("message_field", "message")]}})
-        return {"query": {"bool": {"filter": must}},
+        # debug/trace lines bury the errors; leave them out unless the connector says otherwise
+        skip = self.settings.get("exclude_levels", ["DEBUG", "TRACE"])
+        must_not = [{"match_phrase": {self.settings.get("message_field", "message"): lvl}} for lvl in skip]
+        return {"query": {"bool": {"filter": must, **({"must_not": must_not} if must_not else {})}},
                 "aggs": {"first_seen": {"min": {"field": "@timestamp"}}, "top": top}}
 
     def native_query(self, capability, args):

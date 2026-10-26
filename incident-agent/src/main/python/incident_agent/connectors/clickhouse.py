@@ -18,7 +18,7 @@ IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 class ClickHouse(Connector):
     type = "clickhouse"
-    supported = {"logs.search", "traces.search"}
+    capabilities = {"logs.search", "traces.search"}
     LABEL = "ClickHouse (OpenTelemetry)"
     FIELDS = [
         {"key": "host", "label": "Host", "type": "text", "required": True},

@@ -5,9 +5,24 @@ version is plain code; swap in a fast model (Haiku) when results get fuzzy.
 """
 
 
+import re
+
+# container runtime prefix (`<ts> stdout F `), the app's own timestamp, empty MDC brackets `[] [] []`
+_LOG_NOISE = [re.compile(r"^b['\"]"), re.compile(r"^\S+Z\s+(?:stdout|stderr)\s+[FP]\s+"),
+              re.compile(r"^\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?\s+"), re.compile(r"(?:\[\]\s*)+")]
+
+
 def _clip(s: str, n: int = 70) -> str:
     s = " ".join(str(s).split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def clean_log(line: str, n: int = 200) -> str:
+    """A log line without the prefixes that carry no meaning, so the message itself fits."""
+    s = str(line)
+    for pattern in _LOG_NOISE:
+        s = pattern.sub("", s, count=0 if pattern.pattern.startswith("(?:") else 1)
+    return _clip(s.rstrip("'\""), n)
 
 
 def _pods(data: dict) -> str:
@@ -34,13 +49,34 @@ def _pods(data: dict) -> str:
     return " · ".join(parts)
 
 
+def metric_trend(pts: list) -> str:
+    """RISING (ends well above the start), SPIKE (peak well above both ends: it rose and recovered),
+    FALLING or stable."""
+    (_, v0), (_, v1) = pts[0], pts[-1]
+    vp = max(v for _, v in pts)
+    if v1 > v0 * 1.5 and v1 - v0 > 1:
+        return "RISING"
+    if vp > max(v0, v1) * 1.5 and vp - max(v0, v1) > 1:
+        return "SPIKE"
+    return "FALLING" if v1 < v0 / 1.5 else "stable"
+
+
+def crossed(data: dict, args: dict) -> list:
+    """Points where a monitor condition was met (value op threshold)."""
+    if "threshold" not in data:
+        return []
+    op, th = args.get("op", ">="), data["threshold"]
+    test = {">=": lambda v: v >= th, ">": lambda v: v > th, "<=": lambda v: v <= th, "<": lambda v: v < th}[op]
+    return [p for p in data["points"] if test(p[1])]
+
+
 def summarize(capability: str, data: dict, args: dict) -> str:
     if capability == "logs.search":
         if not data["total"]:
             return "0 hits"
         if data["top"] and data["top"][0][1] is None:  # example lines (plain-text message field)
-            return f"{data['total']} hits · first seen {data['first_seen']} · e.g. " + " | ".join(_clip(m, 90) for m, _ in data["top"])
-        tops = "; ".join(f"{n}× {_clip(m)}" for m, n in data["top"])
+            return f"{data['total']} hits · first seen {data['first_seen']} · e.g. " + " | ".join(clean_log(m) for m, _ in data["top"])
+        tops = "; ".join(f"{n}× {clean_log(m, 120)}" for m, n in data["top"])
         return f"{data['total']} hits · first seen {data['first_seen']} · top: {tops or '-'}"
 
     if capability == "metrics.query":
@@ -49,7 +85,14 @@ def summarize(capability: str, data: dict, args: dict) -> str:
             return f"{args['metric']}: no data"
         (t0, v0), (t1, v1) = pts[0], pts[-1]
         tp, vp = max(pts, key=lambda p: p[1])
-        trend = "RISING" if v1 > v0 * 1.5 and v1 - v0 > 1 else "FALLING" if v1 < v0 / 1.5 else "stable"
+        if args["metric"] == "alert_condition":
+            hit = crossed(data, args)
+            cond = f"alert condition of monitor {args.get('monitor_id')} ({args.get('op')} {data.get('threshold')})"
+            return (f"{cond}: MET {len(hit)}× from {hit[0][0]} to {hit[-1][0]}, peak {vp} at {tp}" if hit else
+                    f"{cond}: not met in the window (peak {vp} at {tp})")
+        trend = metric_trend(pts)
+        if trend == "SPIKE":
+            return f"{args['metric']}: SPIKE to {vp} at {tp} ({v0} at {t0} → {v1} at {t1}, recovered)"
         return f"{args['metric']}: {v0} at {t0} → {v1} at {t1} (peak {vp} at {tp}) — {trend}"
 
     if capability == "alerts.list":
@@ -75,6 +118,15 @@ def summarize(capability: str, data: dict, args: dict) -> str:
             return "no spans"
         ops = ", ".join(f"{_clip(n, 40)} {p}ms" for n, p in data["slowest_ops"])
         db = f" · db p99 {data['db_p99_ms']}ms" if data.get("db_p99_ms") is not None else ""
-        return f"{data['count']} spans · p99 {data['p99_ms']}ms · {data['error_count']} errors · slowest: {ops}{db}"
+        errors = f"{data['error_count']} errors"
+        if "server_errors" in data:  # what the errors are: 4xx = client, 5xx = server
+            by = "; ".join(f"{n}× {code} {_clip(str(r), 45)}" for code, r, n in data.get("errors_by", []))
+            errors += f" (5xx: {data['server_errors']}" + (f" · {by}" if by else "") + ")"
+        if data.get("server_errors") and "downstream_5xx" in data:  # where the 5xx came from, from sample traces
+            down = data["downstream_5xx"]
+            errors += (" · 5xx traces call: " + ", ".join(f"{s} ({n} err)" for s, n in down.items()) if down else
+                       f" · 5xx answered by {args.get('service', 'the service')} itself: no downstream call in "
+                       f"{data.get('traces_checked', 0)} sample trace(s)")
+        return f"{data['count']} spans · p99 {data['p99_ms']}ms · {errors} · slowest (not errors): {ops}{db}"
 
     return str(data)[:200]

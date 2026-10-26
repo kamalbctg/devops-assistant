@@ -1,6 +1,10 @@
 <!doctype html>
 <html lang="en">
 <head>
+<script>
+  // apply the saved theme before the page paints (no flash)
+  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DevOps Agents</title>
@@ -12,14 +16,27 @@
   --bad: #c62f2f; --bad-soft: #fde7e7; --info: #1769aa; --info-soft: #e4f0fb;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* Theme: follows the system unless the header toggle picked light or dark (data-theme on <html>). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #12151a; --panel: #1a1e25; --line: #2b313a; --text: #e6e9ee; --muted: #949daa;
     --accent: #9d92ff; --accent-soft: #2a2550;
     --ok: #5fd08f; --ok-soft: #173325; --warn: #f0b052; --warn-soft: #3a2c12;
     --bad: #ff7b7b; --bad-soft: #3d1b1b; --info: #6fb3f0; --info-soft: #172a3d;
+    color-scheme: dark;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #12151a; --panel: #1a1e25; --line: #2b313a; --text: #e6e9ee; --muted: #949daa;
+  --accent: #9d92ff; --accent-soft: #2a2550;
+  --ok: #5fd08f; --ok-soft: #173325; --warn: #f0b052; --warn-soft: #3a2c12;
+  --bad: #ff7b7b; --bad-soft: #3d1b1b; --info: #6fb3f0; --info-soft: #172a3d;
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
+.theme-btn { border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 8px; padding: 4px 10px;
+  font: inherit; font-size: 12px; cursor: pointer; margin-left: 12px; }
+.theme-btn:hover { border-color: var(--accent); }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
 header { display: flex; align-items: center; gap: 24px; padding: 0 20px; height: 54px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
@@ -29,7 +46,7 @@ header nav { display: flex; gap: 4px; }
 header nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 6px; }
 header nav a.active, header nav a:hover { color: var(--text); background: var(--bg); }
 header .right { margin-left: auto; color: var(--muted); font-size: 12px; }
-.layout { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 54px); }
+.layout { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 54px); }
 aside { border-right: 1px solid var(--line); background: var(--panel); padding: 14px; overflow-y: auto; max-height: calc(100vh - 54px); position: sticky; top: 54px; }
 aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 4px 8px; }
 .btn { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
@@ -43,6 +60,28 @@ aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; co
 .run-item .q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-item .meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; margin-top: 3px; }
 main { padding: 24px 28px 60px; max-width: 1100px; width: 100%; }
+main.wide { max-width: none; }
+.agent-head .btn { white-space: nowrap; flex: none; }
+.agent-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 30%); gap: 16px; align-items: start; }
+.agent-page .side { position: sticky; top: 70px; height: calc(100vh - 86px); display: flex; flex-direction: column; }
+.agent-page .side #agentRuns { overflow-y: auto; flex: 1; margin: 0 -6px; }
+.run-list .r { padding: 10px 6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 6px; }
+.run-list .r:hover { background: var(--bg); }
+.run-list .r.live { background: var(--accent-soft); }
+.run-list .r { position: relative; padding-right: 34px; }
+.run-list .rm { position: absolute; top: 8px; right: 4px; border: 0; background: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; padding: 2px 6px; border-radius: 6px; opacity: 0; }
+.run-list .r:hover .rm, .run-list .rm:focus { opacity: 1; }
+.run-list .rm:hover { color: var(--bad); background: var(--bad-soft); }
+@media (hover: none) { .run-list .rm { opacity: 1; } }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.run-list .q { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.run-list .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.live-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.live-head .q { font-weight: 600; overflow-wrap: anywhere; }
+.live-sum { margin-top: 4px; margin-bottom: 10px; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 6px; }
+#liveSteps { max-height: 460px; overflow-y: auto; }
+@media (max-width: 1100px) { .agent-page { grid-template-columns: 1fr; } .agent-page .side { position: static; height: auto; } }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
 .card h2 { margin: 0 0 12px; font-size: 15px; }
 h1 { font-size: 20px; margin: 0 0 4px; }
@@ -140,7 +179,7 @@ aside { padding: 14px 10px; }
 .nav-item:hover { background: var(--bg); }
 .nav-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .nav-item .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-item .cnt { font-size: 11px; color: var(--muted); }
+.nav-item .cnt, h2 .cnt { font-size: 12px; font-weight: 400; color: var(--muted); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .dot.running { background: var(--info); animation: pulse 1.2s ease-in-out infinite; }
 .dot.waiting { background: var(--warn); }
@@ -159,6 +198,7 @@ aside { padding: 14px 10px; }
 .agent-foot { margin-top: auto; padding-top: 14px; display: flex; justify-content: space-between; align-items: center; }
 .agent-foot .open { color: var(--accent); font-weight: 600; font-size: 13px; }
 .warn-t { color: var(--warn); margin-top: 6px; }
+h2 .cnt.warn-t { margin-top: 0; }
 .new-tile { border-style: dashed; min-height: 180px; display: flex; flex-direction: column; justify-content: center; }
 .dot { display: inline-block; vertical-align: 1px; }
 .rep h2 { display: flex; align-items: center; gap: 10px; }
@@ -169,6 +209,19 @@ tr.cited td { background: var(--ok-soft); }
 .tl { display: grid; grid-template-columns: 80px 1fr; gap: 10px; padding: 5px 0; position: relative; }
 .tl::before { content: ""; position: absolute; left: -20px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
 textarea.prompt-box { min-height: 420px; line-height: 1.45; }
+.pv-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.pv-row:last-child { border-bottom: 0; }
+.pv-row .v { font-family: var(--mono); font-weight: 600; color: var(--accent); }
+.diff { font-family: var(--mono); font-size: 12px; background: var(--bg); border-radius: 8px; padding: 8px 0; max-height: 420px; overflow: auto; margin-top: 10px; }
+.diff div { white-space: pre; padding: 0 12px; min-height: 1.45em; }
+.diff .add { background: var(--ok-soft); color: var(--ok); }
+.diff .del { background: var(--bad-soft); color: var(--bad); }
+.diff .ctx { color: var(--muted); }
+.diff .gap-line { color: var(--muted); font-style: italic; background: var(--panel); }
+.form-page { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 16px; align-items: start; }
+.form-side { position: sticky; top: 70px; max-height: calc(100vh - 86px); overflow-y: auto; border-radius: 12px; }
+.form-side textarea.prompt-box { height: calc(100vh - 330px); resize: vertical; font-size: 12px; white-space: pre; overflow-x: auto; }
+@media (max-width: 1100px) { .form-page { grid-template-columns: 1fr; } .form-side { position: static; } .form-side textarea.prompt-box { height: auto; } }
 .af-row { display: grid; grid-template-columns: 1.1fr 0.8fr 1.4fr 2.4fr auto; gap: 8px; align-items: start; margin-top: 8px; }
 .af-row input, .af-row select { margin: 0; }
 @media (max-width: 760px) { .af-row { grid-template-columns: 1fr 1fr; } }
@@ -182,7 +235,7 @@ textarea.notes-box { min-height: 160px; line-height: 1.45; }
 <header>
   <a class="logo" href="#/" style="color:inherit;text-decoration:none"><span></span>DevOps Agents</a>
   <nav><a href="/docs" target="_blank">API</a></nav>
-  <div class="right" id="health"></div>
+  <div class="right"><span id="health"></span><button class="theme-btn" id="themeBtn" title="Switch theme"></button></div>
 </header>
 <div class="layout">
   <aside id="nav"></aside>
@@ -197,6 +250,30 @@ const badge = (v, cls) => `<span class="badge b-${esc(cls || v)}">${esc(String(v
 const modeBadge = m => badge(m === "fake" ? "demo data" : "live", m);
 const ago = t => { if (!t) return "never"; const s = Math.round(Date.now() / 1000 - t); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`; };
 const CAP_LABEL = {"alerts.list": "alerts", "metrics.query": "metrics", "logs.search": "logs", "traces.search": "traces", "deploys.list": "deploys", "k8s.events": "pod events", "k8s.pods": "pod health"};
+// "https://app.datadoghq.com/monitors/123?…&event_ts=…" → "Datadog monitor #123 · alert Oct 7, 10:04"
+function runTitle(q) {
+  const m = String(q || "").match(/https:\/\/app\.\S*datad\S*\/monitors\/(\d+)\S*/);
+  if (!m) return q;
+  let ts = null;
+  try { const u = new URL(m[0]); ts = u.searchParams.get("event_ts") || u.searchParams.get("link_event_ts") || u.searchParams.get("to_ts"); } catch (e) { /* not a URL */ }
+  const at = ts ? " · alert " + new Date(+ts > 1e12 ? +ts : +ts * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "";
+  const rest = q.replace(m[0], "").trim();
+  return `🔔 Datadog monitor #${m[1]}${at}` + (rest ? ` — ${rest}` : "");
+}
+// ------------------------------------------------------------------ theme: system → light → dark → system
+const THEMES = {system: "◐ System", light: "☀ Light", dark: "☾ Dark"};
+function currentTheme() { return document.documentElement.dataset.theme || "system"; }
+function setTheme(t) {
+  if (t === "system") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  try { t === "system" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch (e) { /* storage blocked */ }
+  $("themeBtn").textContent = THEMES[t];
+}
+function wireTheme() {
+  const order = ["system", "light", "dark"];
+  $("themeBtn").textContent = THEMES[currentTheme()];
+  $("themeBtn").onclick = () => setTheme(order[(order.indexOf(currentTheme()) + 1) % order.length]);
+}
+
 const caps = list => list.map(c => CAP_LABEL[c] || c).join(", ");
 
 
@@ -216,7 +293,7 @@ function go(hash) { location.hash = hash; }
 async function refreshConfig() { [AGENTS, CONNECTORS, LLM] = await Promise.all([api("/agents"), api("/connectors"), api("/llm")]); }
 
 
-let LLM = {models: [], efforts: []}, AGENTS = [], CONNECTORS = [], TYPES = [], AGENT_TYPES = [], RUNS = [], current = null, stream = null, activeAgent = null, navSection = null;
+let LLM = {models: [], efforts: []}, AGENTS = [], CONNECTORS = [], TYPES = [], AGENT_TYPES = [], RUNS = [], AGENT_RUNS = [], current = null, stream = null, activeAgent = null, navSection = null;
 const typeOf = t => AGENT_TYPES.find(x => x.type === t) || {label: t, icon: "•", examples: []};
 
 async function route() {
@@ -224,6 +301,7 @@ async function route() {
   if (stream) { stream.close(); stream = null; }
   const parts = h.slice(2).split("/").filter(Boolean);
   current = null; activeAgent = null; navSection = parts[0] || null;
+  $("main").classList.remove("wide"); liveRun = null;
   await refreshConfig();
   if (["run", "agent", ""].includes(parts[0] || "")) navSection = "agents";
   if (parts[0] === "run") { await openRun(parts[1]); return renderNav(); }
@@ -247,15 +325,24 @@ async function route() {
 
 async function loadRuns() {
   try {
-    RUNS = await api("/investigations"); renderNav();
-    if (activeAgent) renderAgentRuns(activeAgent);
+    // the agent page asks the server for that agent's runs, so another agent's runs never push them out
+    [RUNS, AGENT_RUNS] = await Promise.all([api("/investigations"),
+      activeAgent ? api("/investigations?agent_id=" + encodeURIComponent(activeAgent)) : []]);
+    renderNav();
+    if (activeAgent) {
+      renderAgentRuns(activeAgent);
+      // an alert-triggered run that started while the page is idle shows up live too
+      const running = AGENT_RUNS.find(r => r.status === "running");
+      if (running && !liveRun && $("live")) watchLive(running.id);
+    }
     else if (navSection === "agents" && document.querySelector(".agent-card, .new-tile")) renderAgentCards();
   } catch (e) { /* server restarting */ }
 }
 
 function renderNav() {
-  const busy = RUNS.some(r => r.status === "running") ? '<span class="dot running" title="investigation running"></span>'
-             : RUNS.some(r => r.status === "waiting_input") ? '<span class="dot waiting" title="waiting for an answer"></span>' : "";
+  const live = RUNS.filter(r => AGENTS.some(a => a.id === r.agent_id));
+  const busy = live.some(r => r.status === "running") ? '<span class="dot running" title="investigation running"></span>'
+             : live.some(r => r.status === "waiting_input") ? '<span class="dot waiting" title="waiting for an answer"></span>' : "";
   const item = (key, href, label, extra) =>
     `<a class="nav-item ${navSection === key ? "active" : ""}" href="${href}"><span class="n">${label}</span>${extra}</a>`;
   $("nav").innerHTML =
@@ -314,8 +401,10 @@ function renderAgentHome(id) {
   const a = AGENTS.find(x => x.id === id);
   if (!a) { $("main").innerHTML = '<div class="empty">Agent not found</div>'; return; }
   const t = typeOf(a.type);
+  $("main").classList.add("wide");
   $("main").innerHTML = `
     <a class="crumb" href="#/agents">← Agents</a>
+    <div class="agent-page"><div>
     <div class="card">
       <div class="agent-head">
         <div><span class="type-pill">${esc(t.icon)} ${esc(t.label)}</span>
@@ -325,7 +414,7 @@ function renderAgentHome(id) {
       </div>
       <div class="hint" style="margin-top:10px">Services: <b>${esc(a.services.length ? a.services.join(", ") : "all services the connectors see")}</b> · Connectors:
         ${a.connectors.map(c => esc(c.name) + (c.status === "failed" ? " " + badge("failed") : "")).join(", ")}</div>
-      <details style="margin-top:8px"><summary class="hint">Instructions: ${a.prompt_is_default ? "default" : "<b>customized</b>"} — view</summary>
+      <details style="margin-top:8px"><summary class="hint">Instructions: ${a.prompt_is_default ? "default" : "<b>customized</b>"}${a.prompt_version ? ` · v${a.prompt_version}` : ""} — view</summary>
         <pre class="raw">${esc(a.prompt)}</pre></details>
       <div class="hint">Model: <b>${esc(a.llm_label)}</b>${a.llm.model !== "scripted" && !LLM.key_set ? ' · <a href="#/llm">⚠ add an Anthropic API key</a>' : ""}</div>
       ${a.not_configured.length ? `<div class="gap">Cannot check: ${esc(caps(a.not_configured))} (no connector)</div>` : ""}
@@ -340,22 +429,121 @@ function renderAgentHome(id) {
         <span class="hint">Include the service and when it started. ⌘/Ctrl+Enter to start.</span>
       </div>
       <div class="err" id="err"></div>
+      <div id="full"></div>
     </div>
-    <div class="card"><h2>Investigations</h2><div id="agentRuns"></div></div>`;
+    <div class="card" id="live"></div>
+    </div>
+    <div class="card side">
+      <h2 style="margin-bottom:2px">${esc(a.name)} investigations <span class="cnt" id="runCount"></span></h2>
+      <div class="hint" style="margin:0 0 8px">Only runs of this agent, newest first · kept ${a.retention.keep_days} day${a.retention.keep_days === 1 ? "" : "s"}.</div>
+      <div id="agentRuns"></div></div>
+    </div>`;
   document.querySelectorAll("[data-ex]").forEach(c => c.onclick = () => { $("q").value = c.dataset.ex; $("q").focus(); });
   $("q").onkeydown = e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) start(a.id); };
   $("start").onclick = () => start(a.id);
+  AGENT_RUNS = null;  // loading: loadRuns fetches this agent's runs
   renderAgentRuns(a.id);
+  renderLiveIdle();
+  loadRuns();  // fills the list and follows a running investigation
+}
+
+// ------------------------------------------------------------------ live execution log (agent page)
+
+let liveRun = null;
+
+function renderLiveIdle() {
+  liveRun = null;
+  if ($("live")) $("live").innerHTML = `<h2>Current execution</h2>
+    <div class="hint">No investigation running. Start one above: its steps stream here live.</div>`;
+}
+
+const stepLi = s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span></li>`;
+
+function renderLive(run) {
+  const el = $("live");
+  if (!el) return;
+  const running = run.status === "running", v = run.verdict, c = v && v.conclusion;
+  el.innerHTML = `
+    <div class="live-head">
+      <div><h2 style="margin:0 0 4px">Current execution ${running ? '<span class="spinner"></span>' : ""}</h2>
+        <div class="q" title="${esc(run.question)}">${esc(runTitle(run.question))}</div>
+        <div class="hint" style="margin-top:2px">started ${ago(run.created)}${run.source !== "chat" ? " · from " + esc(run.source) : ""}</div></div>
+      <div style="text-align:right">${badge(run.status)}${v ? " " + badge(v.confidence) : ""}
+        <div style="margin-top:6px"><a href="#/run/${esc(run.id)}">${running ? "Open run →" : "Full report →"}</a></div></div>
+    </div>
+    ${run.status === "failed" ? `<div class="gap mono">${esc(run.error)}</div>` : ""}
+    ${c ? `<div class="live-sum"><b>${esc(String(v.status).replace(/_/g, " "))}:</b> ${esc(c.summary)}</div>` : ""}
+    <ul class="steps" id="liveSteps">${run.events.map(stepLi).join("")}</ul>
+    ${!run.events.length ? `<div class="hint" id="liveEmpty">${running ? "Starting…" : "No steps."}</div>` : ""}`;
+  const ul = $("liveSteps");
+  ul.scrollTop = ul.scrollHeight;
+}
+
+async function watchLive(id) {
+  if (stream) { stream.close(); stream = null; }
+  let run;
+  try { run = await api("/investigations/" + id); } catch (e) { return renderLiveIdle(); }
+  liveRun = id;
+  renderLive(run);
+  renderAgentRuns(run.agent_id);
+  if (run.status !== "running") return;
+  stream = new EventSource(`/investigations/${id}/stream`);
+  let seen = 0;
+  stream.addEventListener("step", e => {
+    if (++seen <= run.events.length || liveRun !== id) return;  // the stream replays steps already shown
+    const s = JSON.parse(e.data);
+    run.events.push(s);
+    const ul = $("liveSteps");
+    if (!ul) return;
+    if ($("liveEmpty")) $("liveEmpty").remove();
+    const atBottom = ul.scrollHeight - ul.scrollTop - ul.clientHeight < 40;
+    ul.insertAdjacentHTML("beforeend", stepLi(s));
+    if (atBottom) ul.scrollTop = ul.scrollHeight;
+  });
+  const finish = async () => {
+    if (stream) { stream.close(); stream = null; }
+    await loadRuns();
+    if (liveRun === id && $("live")) renderLive(await api("/investigations/" + id));
+  };
+  ["done", "failed", "waiting_input"].forEach(ev => stream.addEventListener(ev, finish));
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; setTimeout(() => liveRun === id && $("live") && watchLive(id), 1500); } };
 }
 
 function renderAgentRuns(id) {
   const el = $("agentRuns");
   if (!el) return;
-  const runs = RUNS.filter(r => r.agent_id === id);
-  el.innerHTML = runs.length ? `<table class="runs-table"><thead><tr><th>Question</th><th>Status</th><th>Confidence</th><th>Source</th><th>When</th></tr></thead><tbody>
-    ${runs.map(r => `<tr onclick="go('#/run/${esc(r.id)}')"><td class="q">${esc(r.question)}</td><td>${badge(r.status)}</td>
-      <td>${r.verdict ? badge(r.verdict.confidence) : "-"}</td><td>${badge(r.source, "src")}</td><td class="hint">${ago(r.created)}</td></tr>`).join("")}
-    </tbody></table>` : '<div class="hint">No investigations yet.</div>';
+  if (AGENT_RUNS === null) { el.innerHTML = '<div class="hint"><span class="spinner"></span> Loading…</div>'; return; }
+  const runs = AGENT_RUNS.filter(r => r.agent_id === id);
+  const agent = AGENTS.find(x => x.id === id), max = agent ? agent.retention.max_investigations : 100;
+  if ($("runCount")) { $("runCount").textContent = `· ${runs.length} / ${max}`; $("runCount").classList.toggle("warn-t", runs.length >= max); }
+  if ($("start")) {
+    const full = runs.length >= max;
+    $("start").disabled = full;
+    $("full").innerHTML = full ? `<div class="gap">Limit reached: ${runs.length} of ${max} investigations kept. Delete old ones (🗑 in the list) to start a new one.</div>` : "";
+  }
+  el.innerHTML = runs.length ? `<div class="run-list">${runs.map(r => `
+    <div class="r ${r.id === liveRun ? "live" : ""}" data-run="${esc(r.id)}" title="${esc(r.question)}">
+      ${r.status !== "running" ? `<button class="rm" data-rm="${esc(r.id)}" title="Delete investigation" aria-label="Delete investigation">🗑</button>` : ""}
+      <div class="q">${esc(runTitle(r.question))}</div>
+      <div class="meta">${badge(r.status)}${r.verdict ? badge(r.verdict.confidence) : ""}${badge(r.source, "src")}<span>${ago(r.created)}</span></div>
+    </div>`).join("")}</div>` : '<div class="hint">No investigations yet.</div>';
+  el.querySelectorAll("[data-rm]").forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    const r = (AGENT_RUNS || []).find(x => x.id === b.dataset.rm);
+    if (await deleteRun(r) && liveRun === r.id) renderLiveIdle();
+  });
+  // a running investigation opens in the live panel; a finished one opens its report
+  el.querySelectorAll("[data-run]").forEach(row => row.onclick = () => {
+    const r = (AGENT_RUNS || []).find(x => x.id === row.dataset.run);
+    if (r && r.status === "running" && $("live")) watchLive(r.id); else go("#/run/" + row.dataset.run);
+  });
+}
+
+async function deleteRun(r) {
+  if (!r || !confirm(`Delete this investigation?\n\n${runTitle(r.question)}\n\nIts report, steps and audit log are removed for good.`)) return false;
+  try { await del(`/investigations/${r.id}`); } catch (e) { alert(e.message); return false; }
+  await loadRuns();
+  return true;
 }
 
 async function start(agentId) {
@@ -364,9 +552,12 @@ async function start(agentId) {
   $("start").disabled = true;
   try {
     const run = await post("/investigations", {question, agent_id: agentId});
+    $("q").value = ""; $("err").textContent = "";
     await loadRuns();
-    go("#/run/" + run.id);
-  } catch (e) { $("err").textContent = e.message; $("start").disabled = false; }
+    watchLive(run.id);
+  } catch (e) { $("err").textContent = e.message; }
+  $("start").disabled = false;
+  renderAgentRuns(agentId);  // disables the button again if the agent is now full
 }
 
 // ------------------------------------------------------------------ create / edit agent
@@ -375,6 +566,95 @@ function renderAgentTypePicker() {
   $("main").innerHTML = `<h1>New agent</h1><div class="sub">Choose the type of agent.</div>
     <div class="tiles">${AGENT_TYPES.map(t => `<button class="tile" onclick="go('#/agents/new/${esc(t.type)}')">
       <span class="icon">${esc(t.icon)}</span><b>${esc(t.label)}</b><span class="hint">${esc(t.description)}</span></button>`).join("")}</div>`;
+}
+
+// ------------------------------------------------------------------ prompt versions
+
+function lineDiff(oldText, newText) {
+  // LCS over lines (prompts are a few hundred lines at most) → [["ctx"|"del"|"add", line]]
+  const a = oldText.split("\n"), b = newText.split("\n"), n = a.length, m = b.length;
+  const L = Array.from({length: n + 1}, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push(["ctx", a[i]]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) out.push(["del", a[i++]]);
+    else out.push(["add", b[j++]]);
+  }
+  while (i < n) out.push(["del", a[i++]]);
+  while (j < m) out.push(["add", b[j++]]);
+  return out;
+}
+
+function diffHtml(oldText, newText) {
+  const rows = lineDiff(oldText, newText);
+  if (!rows.some(r => r[0] !== "ctx")) return '<div class="hint">No differences.</div>';
+  // show changes with 2 lines of context; fold the unchanged stretches between them
+  const near = rows.map((_, i) => rows.slice(Math.max(0, i - 2), i + 3).some(r => r[0] !== "ctx"));
+  const sign = {ctx: "  ", del: "- ", add: "+ "}, html = [];
+  let folded = 0;
+  rows.forEach(([k, line], i) => {
+    if (!near[i]) { folded++; return; }
+    if (folded) { html.push(`<div class="gap-line">  … ${folded} unchanged line${folded === 1 ? "" : "s"}</div>`); folded = 0; }
+    html.push(`<div class="${k}">${sign[k]}${esc(line)}</div>`);
+  });
+  if (folded) html.push(`<div class="gap-line">  … ${folded} unchanged line${folded === 1 ? "" : "s"}</div>`);
+  return `<div class="diff">${html.join("")}</div>`;
+}
+
+function wirePromptHistory(a, onChange) {
+  let versions = null;
+  const box = $("pHist");
+  const when = t => new Date(t * 1000).toLocaleString([], {year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+  const render = () => {
+    box.innerHTML = `<div class="card" style="margin:0;background:var(--bg)">
+      <h2 style="margin-bottom:4px">Version history <span class="cnt">· ${versions.length}</span></h2>
+      <div class="hint" style="margin:0 0 6px">Every saved change. Investigations record the version they ran with.
+        <b>Make current</b> switches the agent back to an old version right away (no copy).
+        <b>Load</b> puts it in the editor to change it first; Save then makes it a new version.</div>
+      <div id="pvMsg"></div>
+      ${versions.map(v => `<div class="pv-row">
+        <span class="v">v${v.version}</span>
+        <div><div>${esc(v.note || (v.version === a.prompt_version ? "current" : "edited"))}${v.version === a.prompt_version ? " " + badge("current", "ok") : ""}</div>
+          <div class="hint" style="margin:0">${when(v.created_at)} · ${v.prompt.length.toLocaleString()} chars</div></div>
+        <div class="row-actions"><button class="btn small" data-cmp="${v.version}">Compare with editor</button>
+          ${v.version !== a.prompt_version ? `<button class="btn small" data-use="${v.version}">Make current</button>
+            <button class="btn small" data-load="${v.version}">Load</button>` : ""}</div>
+      </div><div id="pvDiff${v.version}"></div>`).join("")}</div>`;
+    box.querySelectorAll("[data-cmp]").forEach(b => b.onclick = () => {
+      const v = versions.find(x => x.version === +b.dataset.cmp), el = $("pvDiff" + v.version);
+      el.innerHTML = el.innerHTML ? "" : `<div class="hint" style="margin:6px 0 0">− v${v.version} · + editor</div>` + diffHtml(v.prompt, $("prompt").value);
+    });
+    box.querySelectorAll("[data-use]").forEach(b => b.onclick = async () => {
+      const v = versions.find(x => x.version === +b.dataset.use);
+      if ($("prompt").value.trim() !== (a.prompt || "").trim() && !confirm("Discard your unsaved changes in the editor?")) return;
+      try {
+        const saved = await post(`/agents/${a.id}/prompt-versions/${v.version}/activate`);
+        a.prompt = saved.prompt; a.prompt_version = saved.prompt_version; a.prompt_is_default = saved.prompt_is_default;
+        $("prompt").value = a.prompt; $("prompt").scrollTop = 0; $("pNote").value = "";
+        $("pVer").textContent = "v" + a.prompt_version;
+        onChange(); render();
+        $("pvMsg").innerHTML = `<div class="hint" style="margin:0 0 6px">✓ v${v.version} is now in use. New investigations run with it.</div>`;
+      } catch (e) { $("pvMsg").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+    });
+    box.querySelectorAll("[data-load]").forEach(b => b.onclick = () => {
+      const v = versions.find(x => x.version === +b.dataset.load);
+      if ($("prompt").value.trim() !== (a.prompt || "").trim() && !confirm("Replace your unsaved changes in the editor?")) return;
+      $("prompt").value = v.prompt;
+      onChange();
+      $("pNote").value = `restored from v${v.version}`;
+      $("prompt").scrollTop = 0;
+    });
+  };
+  $("pHistBtn").onclick = async () => {
+    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    box.style.display = "";
+    box.innerHTML = '<div class="hint"><span class="spinner"></span> Loading…</div>';
+    try { versions = await api(`/agents/${a.id}/prompt-versions`); render(); box.scrollIntoView({block: "nearest", behavior: "smooth"}); }
+    catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  };
 }
 
 async function renderAgentForm(id, typeName) {
@@ -387,25 +667,18 @@ async function renderAgentForm(id, typeName) {
   }
   const chosen = new Set(a ? a.connector_ids : []);
   const t = typeOf(a ? a.type : typeName);
+  $("main").classList.add("wide");
   $("main").innerHTML = `
     <span class="type-pill">${esc(t.icon)} ${esc(t.label)}</span>
     <h1 style="margin-top:8px">${a ? "Edit agent" : "New agent"}</h1>
     <div class="sub">${esc(t.description)}</div>
+    <div class="form-page"><div>
     <div class="card">
       <div class="grid2">
         <div><label for="name">Name *</label><input id="name" value="${esc(a ? a.name : "")}" placeholder="e.g. Payments incident agent"></div>
         <div><label for="desc">Description</label><input id="desc" value="${esc(a ? a.description : "")}"></div>
       </div>
-    </div>
-    <div class="card"><h2>Connectors</h2>
-      <div class="pick">${CONNECTORS.map(c => `
-        <label><span class="l"><input type="checkbox" class="pc" value="${esc(c.id)}" ${chosen.has(c.id) ? "checked" : ""}>
-          <span><b>${esc(c.name)}</b> <span class="hint">${esc(c.label)}</span><br><span class="hint">${esc(caps(c.provides))}</span></span></span>
-          <span>${modeBadge(c.mode)} ${badge(c.status)}</span></label>`).join("")}</div>
-      <div class="hint" style="margin-top:6px">Need another source? <a href="#/connectors/new">Add a connector</a>.</div>
-      <label>Coverage</label><div class="cov" id="cov"></div>
-    </div>
-    <div class="card"><h2>Services</h2>
+      <label style="margin-top:16px">Services</label>
       <div class="checks">
         <label><input type="radio" name="svcmode" value="all" ${!a || !a.services.length ? "checked" : ""}> All services the connectors see</label>
         <label><input type="radio" name="svcmode" value="pick" ${a && a.services.length ? "checked" : ""}> Only selected services</label>
@@ -419,35 +692,24 @@ async function renderAgentForm(id, typeName) {
       <div class="hint" style="margin-top:8px">The agent only investigates these services. Alerts for them start this agent automatically.</div>
     </div>
     <div class="card"><h2>AI model</h2><div class="grid2">
-      <div><label for="model">Reasoning model</label><select id="model">
-        ${LLM.models.map(m => `<option value="${esc(m.id)}" ${(a ? a.llm.model : "claude-opus-5-5") === m.id ? "selected" : ""}>${esc(m.label)} — ${esc(m.note)}</option>`).join("")}
-        <option value="scripted" ${a && a.llm.model === "scripted" ? "selected" : ""}>Scripted — no LLM, demo data only</option></select>
-        <div class="hint">Forms hypotheses, picks the next query, decides when to stop.</div></div>
+      <div><label for="model">Model</label><select id="model">
+        ${LLM.models.map(m => `<option value="${esc(m.id)}" ${(a && LLM.models.some(x => x.id === a.llm.model) ? a.llm.model : "claude-opus-5-5") === m.id ? "selected" : ""}>${esc(m.label)} — ${esc(m.note)}</option>`).join("")}</select>
+        <div class="hint" id="modelUse"></div></div>
       <div><label for="effort">Effort</label><select id="effort">
         ${LLM.efforts.map(e => `<option ${(a ? a.llm.effort : "medium") === e ? "selected" : ""}>${esc(e)}</option>`).join("")}</select>
         <div class="hint">Higher = more thorough reasoning, slower and costlier.</div></div>
-      <div><label for="fast">Fast model</label><select id="fast">
-        ${LLM.models.map(m => `<option value="${esc(m.id)}" ${(a ? a.llm.fast_model : "claude-haiku-4-5") === m.id ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select>
-        <div class="hint">Reads the question (service, time, symptom).</div></div>
     </div>
     <div id="llmWarn"></div></div>
-    <div class="card"><h2>Instructions (prompt) <span id="pBadge"></span></h2>
-      <div class="hint" style="margin-bottom:8px">How this agent investigates — sent to the model as its system prompt. Add your team's knowledge
-        (how your services fail, which log terms matter, what “lost event” means…).</div>
-      <textarea id="prompt" class="mono prompt-box" spellcheck="false">${esc(a ? a.prompt : t.default_prompt)}</textarea>
-      <div class="row-actions" style="margin-top:8px;align-items:center">
-        <button class="btn small" id="pReset">Reset to default</button><span class="hint" id="pCount"></span></div>
-      <details style="margin-top:12px"><summary>Always added after your instructions (not editable)</summary>
-        <pre class="raw">${esc(t.safety_rules)}</pre>
-        <div class="hint">These keep the agent safe whatever the instructions say. Read-only is also enforced in code.</div></details>
-      <details style="margin-top:8px" id="srcNotes"><summary>Data source notes added from the chosen connectors</summary>
-        <div id="srcNotesBody"></div></details>
-      <details style="margin-top:8px"><summary>Also sent to the model on every turn</summary>
-        <div class="hint" style="margin-top:6px">The question · service, symptom and time window · alert details (from a link) · tools available ·
-          budget left · capabilities not configured · hypothesis board · one-line evidence summaries (never raw logs) · notes from the last turn.</div></details>
+    <div class="card"><h2>Connectors</h2>
+      <div class="pick">${CONNECTORS.map(c => `
+        <label><span class="l"><input type="checkbox" class="pc" value="${esc(c.id)}" ${chosen.has(c.id) ? "checked" : ""}>
+          <span><b>${esc(c.name)}</b> <span class="hint">${esc(c.label)}</span><br><span class="hint">${esc(caps(c.provides))}</span></span></span>
+          <span>${modeBadge(c.mode)} ${badge(c.status)}</span></label>`).join("")}</div>
+      <div class="hint" style="margin-top:6px">Need another source? <a href="#/connectors/new">Add a connector</a>.</div>
+      <label>Coverage</label><div class="cov" id="cov"></div>
     </div>
     <div class="card"><h2>Post-investigation analysis <span class="hint" id="afCount"></span></h2>
-      <div class="hint" style="margin-bottom:4px">Fields filled after every investigation by the fast model, from the finished investigation —
+      <div class="hint" style="margin-bottom:4px">Fields filled after every investigation by Claude Haiku, from the finished investigation —
         like post-call analysis on a call. Shown in the report as <i>model-extracted</i>, apart from the verified sections. Values are type-checked.</div>
       <div id="afRows"></div>
       <div class="row-actions" style="margin-top:10px">
@@ -459,6 +721,36 @@ async function renderAgentForm(id, typeName) {
       <div><label for="calls">Max tool calls per investigation</label><input id="calls" type="number" min="1" max="50" value="${a ? a.budget.max_tool_calls : 12}"></div>
       <div><label for="turns">Max reasoning turns</label><input id="turns" type="number" min="1" max="30" value="${a ? a.budget.max_turns : 8}"></div>
       <div><label for="tz">Timezone</label><input id="tz" value="${esc(a ? a.timezone : "UTC")}"><div class="hint">Used to read times like "since 10:04".</div></div>
+    </div></div>
+    <div class="card"><h2>Investigation history</h2><div class="grid2">
+      <div><label for="keepDays">Keep investigations (days)</label><input id="keepDays" type="number" min="1" max="7" value="${a ? a.retention.keep_days : 7}">
+        <div class="hint">1–7. Older investigations are deleted automatically.</div></div>
+      <div><label for="maxRuns">Max investigations</label><input id="maxRuns" type="number" min="1" max="100" value="${a ? a.retention.max_investigations : 100}">
+        <div class="hint">1–100. When full, new investigations (and alert webhooks) are refused until old ones are deleted or expire.</div></div>
+    </div></div>
+    </div>
+    <div class="form-side">
+    <div class="card"><h2>Instructions (prompt) <span id="pBadge"></span>
+      ${a && a.prompt_version ? `<span class="badge b-src" id="pVer" title="Saved version in use">v${a.prompt_version}</span>` : ""}</h2>
+      <div class="hint" style="margin-bottom:8px">How this agent investigates — sent to the model as its system prompt. Add your team's knowledge
+        (how your services fail, which log terms matter, what “lost event” means…).</div>
+      <textarea id="prompt" class="mono prompt-box" spellcheck="false" wrap="off">${esc(a ? a.prompt : t.default_prompt)}</textarea>
+      <div class="row-actions" style="margin-top:8px;align-items:center">
+        <button class="btn small" id="pReset">Reset to default</button>
+        ${a ? '<button class="btn small" id="pHistBtn">Version history</button>' : ""}<span class="hint" id="pCount"></span></div>
+      <div id="pNoteBox" style="display:none;margin-top:10px">
+        <label for="pNote" style="margin-top:0">Change note <span class="hint">(optional, saved with the new version)</span></label>
+        <input id="pNote" maxlength="300" placeholder="e.g. added call-state-engine failure modes"></div>
+      <div id="pHist" style="display:none;margin-top:12px"></div>
+      <details style="margin-top:12px"><summary>Always added after your instructions (not editable)</summary>
+        <pre class="raw">${esc(t.safety_rules)}</pre>
+        <div class="hint">These keep the agent safe whatever the instructions say. Read-only is also enforced in code.</div></details>
+      <details style="margin-top:8px" id="srcNotes"><summary>Data source notes added from the chosen connectors</summary>
+        <div id="srcNotesBody"></div></details>
+      <details style="margin-top:8px"><summary>Also sent to the model on every turn</summary>
+        <div class="hint" style="margin-top:6px">The question · service, symptom and time window · alert details (from a link) · tools available ·
+          budget left · capabilities not configured · hypothesis board · one-line evidence summaries (never raw logs) · notes from the last turn.</div></details>
+    </div>
     </div></div>
     <div class="card"><div class="row-actions">
       <button class="btn primary" id="save">${a ? "Save" : "Create agent"}</button>
@@ -501,15 +793,17 @@ async function renderAgentForm(id, typeName) {
   const llmWarn = () => {
     const m = $("model").value, effortOk = (LLM.models.find(x => x.id === m) || {}).effort;
     $("effort").disabled = !effortOk;
-    const live = CONNECTORS.some(c => c.mode === "live" && document.querySelector(`.pc[value="${c.id}"]`)?.checked);
-    $("llmWarn").innerHTML = m === "scripted" && live ? '<div class="gap">⚠ Scripted mode only plays the demo incident. Choose a Claude model for real data.</div>'
-      : m !== "scripted" && !LLM.key_set ? '<div class="gap">⚠ No Anthropic API key yet — <a href="#/llm">add it on the LLM page</a>.</div>' : "";
+    $("modelUse").textContent = (LLM.models.find(x => x.id === m) || {}).use_for || "";
+    $("llmWarn").innerHTML = !LLM.key_set ? '<div class="gap">⚠ No Anthropic API key yet — <a href="#/llm">add it on the LLM page</a>.</div>' : "";
   };
   const pState = () => {
     const custom = $("prompt").value.trim() !== t.default_prompt.trim();
     $("pBadge").innerHTML = badge(custom ? "customized" : "default", custom ? "src" : "ok");
     $("pCount").textContent = `${$("prompt").value.length.toLocaleString()} / 20,000 characters`;
+    const changed = !a || $("prompt").value.trim() !== (a.prompt || "").trim();
+    $("pNoteBox").style.display = a && changed ? "" : "none";  // a new version is saved only when the text changed
   };
+  if (a) wirePromptHistory(a, pState);
   $("prompt").oninput = pState;
   $("pReset").onclick = () => { if ($("prompt").value.trim() === t.default_prompt.trim() || confirm("Replace your instructions with the default?")) { $("prompt").value = t.default_prompt; pState(); } };
   pState();
@@ -561,8 +855,9 @@ async function renderAgentForm(id, typeName) {
     const body = {type: t.type, name: $("name").value, services: svcMode() === "all" ? [] : [...SEL], description: $("desc").value, timezone: $("tz").value,
                   connector_ids: [...document.querySelectorAll(".pc:checked")].map(x => x.value),
                   budget: {max_tool_calls: +$("calls").value, max_turns: +$("turns").value},
-                  llm: {model: $("model").value, fast_model: $("fast").value, effort: $("effort").value},
-                  prompt: $("prompt").value,
+                  retention: {keep_days: +$("keepDays").value, max_investigations: +$("maxRuns").value},
+                  llm: {model: $("model").value, effort: $("effort").value},  // fast model: server default (Haiku)
+                  prompt: $("prompt").value, prompt_note: $("pNote").value.trim() || undefined,
                   analysis_fields: AF.map(f => ({name: f.name, type: f.type, description: f.description,
                                                  ...(f.type === "enum" ? {values: f.values.split(",").map(x => x.trim()).filter(Boolean)} : {})}))};
     try { const saved = a ? await put(`/agents/${a.id}`, body) : await post("/agents", body); go("#/agent/" + saved.id); }
@@ -776,9 +1071,10 @@ function renderRun(run) {
     <a class="crumb" href="#/agents">Agents</a> <span class="crumb">/</span> <a class="crumb" href="#/agent/${esc(run.agent_id)}">${esc(run.agent)}</a>
     <div class="card">
       <div class="run-head">
-        <div><h1>${esc(run.question)}</h1>
-          <div class="sub" style="margin:0">${esc(run.agent)} · started ${ago(run.created)} ${run.source !== "chat" ? "· from " + badge(run.source, "src") : ""}</div></div>
-        <div>${running ? '<span class="spinner"></span> ' : ""}${badge(run.status)}</div>
+        <div><h1 title="${esc(run.question)}" style="overflow-wrap:anywhere">${esc(runTitle(run.question))}</h1>
+          <div class="sub" style="margin:0">${esc(run.agent)} · started ${ago(run.created)}${run.prompt_version ? ` · instructions v${run.prompt_version}` : ""} ${run.source !== "chat" ? "· from " + badge(run.source, "src") : ""}</div></div>
+        <div style="display:flex;gap:8px;align-items:center;flex:none">${running ? '<span class="spinner"></span> ' : ""}${badge(run.status)}
+          ${!running ? '<button class="btn small danger" id="delRun">Delete</button>' : ""}</div>
       </div>
     </div>
     ${run.status === "waiting_input" ? askCard(run) : ""}
@@ -791,6 +1087,7 @@ function renderRun(run) {
     </div>
     ${run.audit && run.audit.length ? auditCard(run) : ""}`;
   if (run.status === "waiting_input") wireAsk(run);
+  if ($("delRun")) $("delRun").onclick = async () => { if (await deleteRun(run)) go("#/agent/" + run.agent_id); };
   document.querySelectorAll("tr.ev").forEach(tr => tr.onclick = () => tr.nextElementSibling.hidden = !tr.nextElementSibling.hidden);
 }
 
@@ -887,7 +1184,11 @@ function reportCards(run) {
     ? `<ol class="rep-list">${r.recommendations.map(x => `<li>${esc(x)}</li>`).join("")}</ol>
        <div class="hint">The agent is read-only: it suggests, it never acts.</div>` : '<div class="hint">None.</div>');
 
-  const s6 = sec(6, "Investigation Coverage", `<div class="grid2">
+  const conn = x => x.queries ? `${x.queries} queries · ${x.unusual} unusual${x.failed ? ` · ${x.failed} failed` : ""}` : "not queried";
+  const s6 = sec(6, "Investigation Coverage", `
+    ${(cv.by_connector || []).length ? `<label>Connectors</label><div class="cov">${cv.by_connector.map(x =>
+      badge((x.queries ? (x.unusual ? "● " : "✓ ") : "✗ ") + x.connector + " · " + conn(x), x.queries ? (x.unusual ? "MEDIUM" : "ok") : "LOW")).join("")}</div>` : ""}
+    <div class="grid2">
     <div><label>Checked</label><div class="cov">${cv.checked.map(x => badge("✓ " + x.capability + " · " + x.source, "ok")).join("") || "—"}</div></div>
     <div><label>Not checked</label><div class="cov">${cv.not_checked.map(x => badge("✗ " + x, "MEDIUM")).join("") || '<span class="hint">nothing missing</span>'}</div></div>
     <div><label>Services</label><div class="hint">${esc(cv.services_checked.filter(Boolean).join(", "))}</div></div>
@@ -921,6 +1222,7 @@ function auditCard(run) {
     $("health").textContent = "read-only agents";
   } catch (e) { $("main").innerHTML = `<div class="empty">Cannot reach the server: ${esc(e.message)}</div>`; return; }
   RUNS = await api("/investigations").catch(() => []);
+  wireTheme();
   window.onhashchange = route;
   await route();
   setInterval(loadRuns, 4000);  // running status + alert-triggered runs appear without a refresh

@@ -10,9 +10,23 @@ LANGGRAPH CONCEPT — State
 """
 
 import operator
+import re
 from typing import Annotated, Literal, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_HHMM = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+
+
+def normalize_since(value: str | None) -> str | None:
+    """'HH:MM' from what the model wrote ('10:04', '10:04:30', 'at 9:05'); ISO timestamps pass through.
+    None when there is no usable time."""
+    if not value:
+        return None
+    if "T" in value:
+        return value
+    m = _HHMM.search(value)
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
 
 
 class Scope(BaseModel):
@@ -23,6 +37,11 @@ class Scope(BaseModel):
     since: str | None = Field(None, description="When it started, HH:MM (24h); null if not stated")
     until: str | None = None  # ISO end of window for past incidents (from an alert link); None = now
     alert: dict | None = None  # monitor details when the question was an alert link
+
+    @field_validator("since", mode="before")
+    @classmethod
+    def _since(cls, v):
+        return normalize_since(v)
 
 
 class Evidence(BaseModel):
@@ -54,6 +73,7 @@ class Conclusion(BaseModel):
 
     kind: Literal["root_cause", "answer"] = "root_cause"
     cause_hypothesis: str = ""
+    cause_service: str = ""
     summary: str
     evidence_ids: list[str]
     confidence: Literal["HIGH", "MEDIUM", "LOW"]
@@ -89,6 +109,7 @@ class InvestigationState(TypedDict, total=False):
     notes: list[str]  # feedback for the model's next turn (bad call, finish rejected, ...)
     conclusion: Conclusion | None
     stop_reason: str | None
+    stale_turns: int  # turns in a row without new evidence; the loop stops at MAX_STALE_TURNS
     # end
     verdict: Verdict
     analysis: list[dict] | None  # post-investigation analysis fields (model-extracted, type-checked)
@@ -103,3 +124,4 @@ class BaselineTask(TypedDict, total=False):
     capability: str
     args: dict
     triage: bool  # part of the "which service is affected?" sweep
+    keep: bool  # full check of a few services: keep healthy results too (shows each connector was checked)

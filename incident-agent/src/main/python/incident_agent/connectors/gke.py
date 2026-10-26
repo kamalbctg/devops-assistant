@@ -11,8 +11,11 @@ runs on GCP with Workload Identity (application default credentials).
 """
 
 import base64
+import hashlib
 import json
+import os
 import tempfile
+from pathlib import Path
 
 from .base import ConnectorError
 from .kubernetes import NOTES, Kubernetes
@@ -80,16 +83,24 @@ class GKE(Kubernetes):
             endpoint = info["endpoint"]
             if self.settings.get("use_private_endpoint"):
                 endpoint = info.get("privateClusterConfig", {}).get("privateEndpoint") or endpoint
-            ca = tempfile.NamedTemporaryFile(prefix="gke-ca-", suffix=".crt", delete=False)
-            ca.write(base64.b64decode(info["masterAuth"]["clusterCaCertificate"]))
-            ca.close()
             cfg = client.Configuration()
             cfg.host = f"https://{endpoint}"
-            cfg.ssl_ca_cert = ca.name
+            cfg.ssl_ca_cert = str(self._ca_file(base64.b64decode(info["masterAuth"]["clusterCaCertificate"])))
             cfg.api_key = {"authorization": f"Bearer {creds.token}"}
             api_client = client.ApiClient(cfg)
             self.api = self._make_api(api_client)
         return self.api
+
+    @staticmethod
+    def _ca_file(pem: bytes) -> Path:
+        """The client reads the CA from a file on every connection: keep one file per CA, reused by every run."""
+        path = Path(tempfile.gettempdir()) / f"gke-ca-{hashlib.sha256(pem).hexdigest()[:16]}.crt"
+        if not path.exists():
+            fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            with os.fdopen(fd, "wb") as f:
+                f.write(pem)
+            os.replace(tmp, path)  # atomic: parallel runs never see a half-written file
+        return path
 
     def native_query(self, capability, args):
         cluster = f"{self.settings.get('project')}/{self.settings.get('location')}/{self.settings.get('cluster')}"

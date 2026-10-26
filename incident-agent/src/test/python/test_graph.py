@@ -52,7 +52,7 @@ def test_same_agent_different_stacks(stack, logs_source):
     assert v.conclusion.cause_hypothesis == "H1"
     assert v.confidence == "HIGH"
     assert result["hypotheses"]["H2"].status == "ruled_out"
-    logs = next(e for e in result["evidence"] if e.capability == "logs.search")
+    logs = next(e for e in result["evidence"] if e.capability == "logs.search" and e.args["query"] == "OutOfMemory")
     assert logs.connector == logs_source and logs.summary.startswith("388 hits")
     assert all(a["decision"] == "allow" for a in ctx.gateway.audit)
 
@@ -67,7 +67,7 @@ def test_unnamed_service_is_detected_not_asked():
     result, ctx = run("Everything is slow since 10:04", make_agent())
     t = result["triage"]
     assert t["affected"] == "checkout" and t["checked"] == ["checkout", "payment", "cart"]
-    assert "active alerts" in t["reasons"] and "latency rising" in t["reasons"]
+    assert "active alerts" in t["reasons"] and "latency up" in t["reasons"]
     assert result["scope"].service == "checkout"
     assert result["verdict"].status == "root_cause_found"
     assert result["report_data"]["impact"]["detected"]["checked"] == ["checkout", "payment", "cart"]
@@ -142,17 +142,68 @@ def test_gateway_denies_unconfigured_capability_and_out_of_scope_service():
     assert [a["decision"] for a in gw.audit] == ["deny", "deny"]
 
 
-def test_gateway_falls_back_to_next_connector_when_first_fails():
+def two_log_sources(broken: bool = False) -> AgentConfig:
     class Broken(Datadog):
         def fetch(self, capability, args):
             raise ConnectorError("datadog logs.search failed: HTTP 400")
 
-    agent = AgentConfig(name="t", services=["checkout"],
-                        connectors=[Broken(["logs.search"], {"site": "x"}), Elasticsearch(["logs.search"], {"indices": ["logs-*"]}, mode="fake")])
-    gw = Gateway(agent)
-    result = gw.call("logs.search", {"service": "checkout", "since": "09:00"})
-    assert result.connector == "elasticsearch"
-    assert gw.audit[-1]["decision"] == "allow" and "HTTP 400" in gw.audit[-1]["fallback_from"][0]
+    dd = (Broken if broken else Datadog)(["alerts.list", "logs.search"], {"site": "x"}, mode="live" if broken else "fake",
+                                         name="dd")
+    es = Elasticsearch(["logs.search"], {"indices": ["logs-*"]}, mode="fake", name="es")
+    return AgentConfig(name="t", services=["checkout"], connectors=[dd, es])
+
+
+def test_connectors_are_equal_the_call_names_one():
+    gw = Gateway(two_log_sources())
+    with pytest.raises(PolicyDenied, match="choose one of"):  # no hidden priority
+        gw.call("logs.search", {"service": "checkout", "since": "09:00"})
+    assert gw.call("logs.search", {"service": "checkout", "since": "09:00", "connector": "es"}).connector == "es"
+    assert gw.call("logs.search", {"service": "checkout", "since": "09:00", "connector": "dd"}).connector == "dd"
+    with pytest.raises(PolicyDenied):
+        gw.call("logs.search", {"service": "checkout", "since": "09:00", "connector": "nope"})
+    # one provider: no choice needed
+    assert gw.call("alerts.list", {"service": "checkout", "since": "09:00"}).connector == "dd"
+
+
+def test_a_failing_connector_is_reported_not_silently_replaced():
+    gw = Gateway(two_log_sources(broken=True))
+    with pytest.raises(ConnectorError, match="HTTP 400"):
+        gw.call("logs.search", {"service": "checkout", "since": "09:00", "connector": "dd"})
+    assert gw.audit[-1]["decision"] == "deny"
+
+
+def test_model_gets_a_connector_choice_only_where_several_provide():
+    from typing import get_args
+
+    from incident_agent.agent.tools import agent_tools
+    tools = {t.__name__: t for t in agent_tools(two_log_sources())}
+    assert get_args(tools["logs_search"].model_fields["connector"].annotation) == ("dd", "es")
+    assert "connector" in tools["logs_search"].model_json_schema()["required"]
+    assert "connector" not in tools["alerts_list"].model_fields
+    assert tools["logs_search"].__doc__ and tools["logs_search"].__name__ == "logs_search"
+
+
+def test_baseline_asks_every_connector_that_provides_a_signal():
+    agent = make_agent()
+    agent.connectors.append(Alertmanager(["alerts.list"], {}, mode="fake", name="am"))
+    result, ctx = run("Checkout is slow since 10:04", agent)
+    alerts = {e.connector for e in result["evidence"] if e.capability == "alerts.list" and e.id.startswith("B")}
+    assert alerts == {"datadog", "am"}
+
+
+class RepeatingPlanner(ScriptedPlanner):
+    """Asks the same query every turn."""
+
+    def next_actions(self, view):
+        s = view["scope"]
+        return [{"name": "logs_search", "args": {"service": s.service, "since": s.since, "hypothesis": "H1",
+                                                 "query": "OutOfMemory"}}]
+
+
+def test_loop_stops_when_turns_add_nothing():
+    result, _ = run("Checkout is slow since 10:04", make_agent(), planner=RepeatingPlanner())
+    assert result["stop_reason"] == "no progress: 2 turns without new evidence"
+    assert result["turns"] == 3 and result["tool_calls_used"] == 1
 
 
 def test_report_has_seven_sections_in_order():
@@ -174,6 +225,49 @@ def _link():
     at = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp() * 1000)  # an alert 2 h ago
     return (f"https://app.datadoghq.com/monitors/264260680?group=env%3Aproduction&from_ts={at - 1200000}"
             f"&to_ts={at}&event_id=1&link_source=monitor_notif&link_monitor_id=264260680&link_event_ts={at}")
+
+
+def test_link_times_in_seconds_or_milliseconds():
+    from incident_agent.agent.alert_link import parse_datadog_link, window_from_link
+    # a real notification link: from_ts / to_ts in ms, link_event_ts in seconds
+    link = parse_datadog_link("https://app.datadoghq.com/monitors/264260680?q=env%3Aproduction&from_ts=1792768000000"
+                              "&to_ts=1792769200000&link_event_ts=1792768900&link_monitor_id=264260680")
+    assert link["alert_at"].isoformat() == "2026-10-23T15:21:40+00:00"
+    assert link["from"].isoformat() == "2026-10-23T15:06:40+00:00"
+    start, end = window_from_link(link)
+    assert (start, end) == ("2026-10-23T14:51:40+00:00", "2026-10-23T15:51:40+00:00")
+
+
+def test_composite_monitor_names_the_services_of_its_parts(monkeypatch):
+    dd = Datadog(["alerts.list"], {"site": "datadoghq.com"}, secrets={"api_key": "k", "app_key": "a"})
+    monitors = {
+        "1": {"id": 1, "name": "Gateway 5xx", "type": "composite", "overall_state": "OK", "tags": ["env:prod"],
+              "query": "( 2 || 3 ) && !4"},
+        "2": {"type": "query alert", "tags": [], "query": "sum:trace.hits{http.status_class:5xx, service:verbex-gw} > 1"},
+        "3": {"type": "query alert", "tags": [], "query": "sum:trace.hits{service:cds-gw,kube_node:x} > 1"},
+        "4": {"type": "query alert", "tags": [], "query": "sum:trace.hits{!service:verbex-gw,!service:cds-gw} > 1"},
+    }
+
+    class R:
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    monkeypatch.setattr(dd, "get", lambda path, **kw: R(monitors[path.rsplit("/", 1)[1]]))
+    m = dd.monitor("1")
+    assert m["services"] == ["verbex-gw", "cds-gw"] and m["service"] is None
+    assert dd.monitor("2")["service"] == "verbex-gw"
+
+
+def test_composite_alert_link_triages_only_its_services():
+    agent = make_agent()
+    dd = next(c for c in agent.connectors if c.type == "datadog")
+    dd.monitor = lambda mid: {"id": int(mid), "name": "Gateway 5xx", "state": "Alert", "service": None,
+                              "services": ["payment", "cart"], "query": "( 2 || 3 ) && !4"}
+    result, _ = run(_link(), agent)
+    assert result["triage"]["checked"] == ["payment", "cart"]
 
 
 def test_parse_datadog_link():
@@ -302,3 +396,258 @@ def test_analysis_field_validation():
             fields_values(bad)
     schema = output_model(ok).model_json_schema()
     assert "severity" in schema["properties"]
+
+
+# ---------------------------------------------------------------- input hardening
+
+class RepeatPlanner(ScriptedPlanner):
+    """Sends the same logs query in two turns, then finishes."""
+
+    def next_actions(self, view):
+        logs = {"name": "logs_search", "args": {"service": "checkout", "since": "10:00", "hypothesis": "H1",
+                                                "query": "OutOfMemory"}}
+        if not view["hypotheses"]:
+            return [{"name": "add_hypothesis", "args": {"statement": "memory"}}, logs]
+        if not view["notes"]:
+            return [logs]
+        ids = [e.id for e in view["evidence"]]
+        return [{"name": "finish", "args": {"kind": "answer", "summary": "x", "evidence_ids": ids, "confidence": "LOW"}}]
+
+
+def test_repeat_query_is_skipped_for_past_incident_window():
+    agent = make_agent()
+    next(c for c in agent.connectors if c.type == "datadog").monitor = lambda mid: {"service": "checkout"}
+    result, _ = run(_link(), agent, planner=RepeatPlanner())
+    assert result["scope"].until
+    assert sum(e.capability == "logs.search" and e.id.startswith("E") for e in result["evidence"]) == 1
+    assert result["tool_calls_used"] == 1  # the second, identical query was skipped
+
+
+def test_since_is_normalized_or_rejected():
+    from incident_agent.agent.state import Scope
+    from incident_agent.agent.tools import logs_search
+    from pydantic import ValidationError
+    assert Scope(symptom="slow", since="10:04:30").since == "10:04"
+    assert Scope(symptom="slow", since="at 9:05").since == "09:05"
+    assert Scope(symptom="slow", since="this morning").since is None
+    assert Scope(symptom="slow", since="2026-10-07T10:00:00+00:00").since.startswith("2026")
+    with pytest.raises(ValidationError):
+        logs_search(service="checkout", since="yesterday", hypothesis="H1")
+
+
+def test_gateway_rejects_service_names_that_could_change_a_query():
+    agent = make_agent()
+    agent.services = []  # all services: scope alone would let any string through
+    gw = Gateway(agent)
+    with pytest.raises(PolicyDenied, match="invalid service name"):
+        gw.call("metrics.query", {"service": 'checkout"} or up{a="', "since": "10:00", "metric": "cpu_pct"})
+    assert gw.call("metrics.query", {"service": "checkout-v2.eu", "since": "10:00", "metric": "cpu_pct"})
+
+
+def test_gke_ca_file_is_reused():
+    pem = b"-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n"
+    a, b = GKE._ca_file(pem), GKE._ca_file(pem)
+    assert a == b and a.read_bytes() == pem
+
+
+# ---------------------------------------------------------------- full check of an alert
+
+def test_a_spike_that_recovered_is_unusual():
+    from incident_agent.agent.summarize import metric_trend, summarize
+    pts = [["14:37", 0.0], ["15:20", 57.89], ["15:51", 0.0]]
+    assert metric_trend(pts) == "SPIKE"
+    assert summarize("metrics.query", {"points": pts}, {"metric": "error_rate_pct"}).startswith(
+        "error_rate_pct: SPIKE to 57.89 at 15:20")
+    assert metric_trend([["a", 1.0], ["b", 1.2], ["c", 1.0]]) == "stable"
+
+
+def test_alert_checks_every_connector_and_always_investigates():
+    agent = make_agent()
+    agent.connectors.append(Kubernetes(["logs.search", "k8s.pods"], {"namespaces": ["payment", "cart"]}, mode="fake",
+                                       name="k8s"))
+    dd = next(c for c in agent.connectors if c.type == "datadog")
+    dd.monitor = lambda mid: {"id": int(mid), "name": "Gateway 5xx", "state": "OK", "service": None,
+                              "services": ["payment", "cart"], "query": "( 2 || 3 ) && !4",
+                              "part_queries": ["sum:trace.hits{http.status_class:5xx,!http.status_code:503,service:x}"]}
+    result, _ = run(_link(), agent)
+    cov = {x["connector"]: x for x in result["report_data"]["coverage"]["by_connector"]}
+    assert set(cov) == {"datadog", "elasticsearch", "gke", "k8s"} and all(x["queries"] for x in cov.values())
+    first = [e for e in result["evidence"] if e.id.startswith("B")]
+    assert {e.args["service"] for e in first} == {"payment", "cart"}
+    logs = {e.connector: e.args["query"] for e in first if e.capability == "logs.search" and e.args["service"] == "cart"}
+    assert logs == {"elasticsearch": "500 502 504", "k8s": "500 OR 502 OR 504"}  # what the monitor counts, 503 excluded
+    assert {e.capability for e in first} >= {"alerts.list", "metrics.query", "traces.search", "logs.search",
+                                              "deploys.list", "k8s.events", "k8s.pods"}
+    assert result["stop_reason"] != "no affected service found" and result["turns"] >= 1
+    assert "Connectors: " in result["report"]
+
+
+# ---------------------------------------------------------------- what Datadog measures, and the loop
+
+GATEWAY_5XX = ("sum(last_2m):(default_zero(sum:trace.http.request.hits.by_http_status{http.status_class:5xx,"
+               "!http.status_code:503, service:gw} by {env}.as_count())) / (default_zero(sum:trace.http.request.hits"
+               "{service:gw} by {env}.as_count())) * 100 >= 1")
+
+
+def test_monitor_metric_is_read_from_the_monitor_query():
+    from incident_agent.connectors.datadog import monitor_metric
+    m = monitor_metric(GATEWAY_5XX)
+    assert m["op"] == ">=" and m["threshold"] == 1.0 and m["expr"].startswith("(default_zero(") and "last_2m" not in m["expr"]
+    assert monitor_metric("( 1 || 2 ) && !3") is None
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def json(self):
+        return self.body
+
+
+def live_datadog():
+    return Datadog(["metrics.query", "traces.search", "logs.search"], {"site": "datadoghq.com"},
+                   secrets={"api_key": "k", "app_key": "a"}, name="dd")
+
+
+def test_datadog_error_rate_is_5xx_and_follows_the_alert_env(monkeypatch):
+    dd, seen = live_datadog(), {}
+
+    def get(path, **kw):
+        seen["query"] = kw["query"]
+        return FakeResponse({"series": [
+            {"scope": "env:staging", "pointlist": [[1792935900000, 90.0], [1792936000000, 90.0]]},
+            {"scope": "env:production", "pointlist": [[1792935900000, 0.0], [1792936000000, 2.5],
+                                                      [1792936100000, 0.0]]}]})
+    monkeypatch.setattr(dd, "get", get)
+    r = dd.fetch("metrics.query", {"service": "gw", "since": "2026-10-25T13:45:00+00:00", "metric": "error_rate_pct",
+                                   "env": "production"})
+    assert "http.status_class:5xx" in seen["query"] and "trace.netty.request" in seen["query"]
+    assert "service:gw,env:production" in seen["query"] and "errors" not in seen["query"]
+    assert [v for _, v in r["points"]] == [0.0, 2.5, 0.0]  # the production series, not staging
+
+    r = dd.fetch("metrics.query", {"service": "gw", "since": "2026-10-25T13:45:00+00:00", "metric": "alert_condition",
+                                   "monitor_query": "sum:x{service:gw} by {env}", "threshold": 1.0, "op": ">=",
+                                   "monitor_id": "7", "env": "production"})
+    assert seen["query"] == "sum:x{service:gw} by {env}"
+    from incident_agent.agent.summarize import summarize
+    args = {"metric": "alert_condition", "op": ">=", "monitor_id": "7"}
+    assert summarize("metrics.query", r, args).startswith("alert condition of monitor 7 (>= 1.0): MET 1×")
+    assert dd._filter({"service": "gw", "since": "2026-10-25T13:45:00+00:00", "env": "production"},
+                      "500 OR 502")["query"] == "service:gw env:production (500 OR 502)"
+
+
+def test_traces_tell_4xx_from_5xx():
+    from incident_agent.agent.nodes import _is_anomalous
+    from incident_agent.agent.summarize import summarize
+    data = {"count": 14787, "p99_ms": 3150.0, "error_count": 1914, "server_errors": 0,
+            "errors_by": [["401", "GET /api/feature_flag/local_evaluation/", 1250], ["401", "POST /v1/verify", 414]],
+            "slowest_ops": [["GET /v3/ai-agents", 4606.3]], "db_p99_ms": None}
+    text = summarize("traces.search", data, {})
+    assert "1914 errors (5xx: 0 · 1250× 401 GET /api/feature_flag" in text and "slowest (not errors)" in text
+    assert not _is_anomalous("traces.search", data)  # client errors only
+    assert _is_anomalous("traces.search", {**data, "server_errors": 3})
+
+
+def test_elasticsearch_leaves_out_debug_lines():
+    es = Elasticsearch(["logs.search"], {"indices": ["logs-*"], "message_field": "log"}, mode="fake")
+    body = es.body({"service": "gw", "since": "10:00", "query": "500 502"})
+    assert body["query"]["bool"]["must_not"] == [{"match_phrase": {"log": "DEBUG"}}, {"match_phrase": {"log": "TRACE"}}]
+    es = Elasticsearch(["logs.search"], {"indices": ["logs-*"], "exclude_levels": []}, mode="fake")
+    assert "must_not" not in es.body({"service": "gw", "since": "10:00"})["query"]["bool"]
+
+
+def test_alert_link_env_and_monitor_condition_in_first_check():
+    from incident_agent.agent.alert_link import parse_datadog_link
+    assert parse_datadog_link(_link().replace("group=env%3Aproduction", "q=env%3Aproduction"))["env"] == "production"
+    agent = make_agent()
+    dd = next(c for c in agent.connectors if c.type == "datadog")
+    dd.monitor = lambda mid: {"id": int(mid), "name": "Gateway 5xx", "state": "OK", "service": None,
+                              "services": ["payment", "cart"], "query": "( 2 || 3 ) && !4",
+                              "conditions": [{"monitor_id": "2", "query": GATEWAY_5XX, "service": "payment"}]}
+    result, _ = run(_link(), agent)
+    cond = [e for e in result["evidence"] if e.args.get("metric") == "alert_condition"]
+    assert len(cond) == 1 and cond[0].args["monitor_id"] == "2" and cond[0].args["threshold"] == 1.0
+    assert all(e.args.get("env") == "production" for e in result["evidence"] if e.id.startswith("B"))
+
+
+class BlameBackendPlanner(ScriptedPlanner):
+    """Finishes blaming another service; checks it only when told to."""
+
+    def next_actions(self, view):
+        s, ev = view["scope"], view["evidence"]
+        if not view["hypotheses"]:
+            return [{"name": "add_hypothesis", "args": {"statement": "payment backend fails"}}]
+        if any("nothing about payment was checked" in n for n in view["notes"]):
+            return [{"name": "k8s_events", "args": {"service": "payment", "since": s.since, "hypothesis": "H1"}}]
+        ids = [next(e.id for e in ev if e.capability == c) for c in ("metrics.query", "deploys.list")]
+        return [{"name": "finish", "args": {"cause_hypothesis": "H1", "cause_service": "payment", "summary": "payment",
+                                            "evidence_ids": ids, "confidence": "MEDIUM"}}]
+
+
+def test_blaming_another_service_needs_evidence_from_it():
+    result, _ = run("Checkout is slow since 10:04", make_agent(), planner=BlameBackendPlanner())
+    payment = [e for e in result["evidence"] if e.args.get("service") == "payment"]
+    assert payment and result["verdict"].status == "root_cause_found"
+    assert result["verdict"].conclusion.cause_service == "payment"
+
+
+def test_repeated_query_gets_the_existing_result_and_a_finish_hint():
+    result, _ = run("Checkout is slow since 10:04", make_agent(), planner=RepeatingPlanner())
+    assert result["stop_reason"].startswith("no progress")
+    assert "The model stopped finding new evidence" in result["report_data"]["recommendations"][0]
+
+
+def test_downsampling_keeps_a_short_spike():
+    from incident_agent.connectors.base import downsample
+    pts = [[f"t{i}", 0.0] for i in range(180)]
+    pts[97][1] = 9.09
+    small = downsample(pts)
+    assert len(small) == 12 and small[0] == pts[0] and small[-1] == pts[-1]
+    assert max(v for _, v in small) == 9.09
+
+
+def test_log_lines_lose_their_noise_prefixes():
+    from incident_agent.agent.summarize import clean_log
+    line = ("2026-10-25T14:55:48.584341355Z stdout F 2026-10-25T14:55:48.584Z  WARN [] [] [] [] --- [or-http-epoll-2] "
+            "a.v.g.exception.GlobalExceptionHandler   : [503] GET /api/v1/chatflows ")
+    assert clean_log(line) == "WARN --- [or-http-epoll-2] a.v.g.exception.GlobalExceptionHandler : [503] GET /api/v1/chatflows"
+    assert clean_log("b'2026-10-25T13:45:27.957912979Z Loading feature flags'") == "Loading feature flags"
+
+
+def test_traces_say_whether_5xx_came_from_downstream(monkeypatch):
+    from incident_agent.agent.summarize import summarize
+    dd = live_datadog()
+    posts = []
+
+    def post(path, body):
+        posts.append((path, body))
+        if path == "/api/v2/spans/events/search":
+            return FakeResponse({"data": [{"attributes": {"trace_id": "t1"}}, {"attributes": {"trace_id": "t2"}}]})
+        q = body["data"]["attributes"]["filter"]["query"]
+        if q.startswith("trace_id:t1"):
+            return FakeResponse({"data": [{"attributes": {"by": {"service": "cds-gw"}, "compute": {"c0": 2}}}]})
+        if q.startswith("trace_id:"):
+            return FakeResponse({"data": []})
+        group = body["data"]["attributes"].get("group_by")
+        return FakeResponse({"data": [] if group else [{"attributes": {"compute": {"c0": 3, "c1": 10}}}]})
+    monkeypatch.setattr(dd, "post", post)
+    args = {"service": "gw", "since": "2026-10-25T14:50:00+00:00", "until": "2026-10-25T16:20:00+00:00"}
+    data = dd.fetch("traces.search", args)
+    assert data["downstream_5xx"] == {"cds-gw": 2} and data["traces_checked"] == 2
+    assert "-service:gw status:error" in [b["data"]["attributes"]["filter"]["query"] for _, b in posts][-1]
+    assert "5xx traces call: cds-gw (2 err)" in summarize("traces.search", data, args)
+    data["downstream_5xx"] = {}
+    assert "5xx answered by gw itself: no downstream call in 2 sample trace(s)" in summarize("traces.search", data, args)
+
+
+def test_report_says_when_found_5xx_are_codes_the_monitor_ignores():
+    from incident_agent.agent.report import build_report
+    from incident_agent.agent.state import Evidence, Scope, Verdict
+    scope = Scope(service="gw", symptom="errors", since="10:00",
+                  alert={"query": "( 2 || 3 )", "part_queries": ["sum:x{http.status_class:5xx,!http.status_code:503}"]})
+    ev = Evidence(id="B1", capability="traces.search", connector="dd", args={}, native_query="-", summary="x",
+                  data={"errors_by": [["503", "GET /api/v1/version", 2], ["401", "POST /v1/verify", 9]]})
+    state = {"question": "q", "scope": scope, "evidence": [ev], "hypotheses": {}, "verdict": Verdict(
+        status="inconclusive", confidence="LOW", independent_signals=[], not_checked=[], problems=[]), "triage": None}
+    limits = build_report(state, make_agent())["confidence_detail"]["limitations"]
+    assert any("are codes the monitor ignores (503)" in x for x in limits)

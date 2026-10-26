@@ -11,13 +11,23 @@ same class validates the arguments the model sends back.
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model, field_validator
+
+from incident_agent.agent.state import normalize_since
 
 
 class _DataTool(BaseModel):
     service: str = Field(..., description="Service name, must be in scope")
     since: str = Field(..., description="Start of window, HH:MM")
     hypothesis: str = Field(..., description="Hypothesis id this query tests, e.g. H1")
+
+    @field_validator("since")
+    @classmethod
+    def _since(cls, v):
+        hhmm = normalize_since(v)
+        if hhmm is None:
+            raise ValueError("since must be HH:MM (24h)")
+        return hhmm
 
 
 class alerts_list(_DataTool):
@@ -79,6 +89,9 @@ class finish(BaseModel):
 
     kind: Literal["root_cause", "answer"] = Field("root_cause", description="root_cause or answer")
     cause_hypothesis: str = Field("", description="Hypothesis id, e.g. H1 (required for root_cause)")
+    cause_service: str = Field("", description=(
+        "The service where the cause is, when it is not the investigated one (e.g. a failing backend). "
+        "It must have been checked itself: its pods, events, deploys, logs, traces."))
     summary: str = Field(..., description="root_cause: what happened and why, 1-2 sentences. answer: the answer")
     evidence_ids: list[str]
     confidence: Literal["HIGH", "MEDIUM", "LOW"]
@@ -100,9 +113,23 @@ TOOL_TO_CAPABILITY = {cls.__name__: cap for cap, cls in DATA_TOOLS.items()}
 BOARD_TOOLS = {cls.__name__: cls for cls in (add_hypothesis, set_hypothesis_status, finish)}
 
 
-def tools_for(capabilities: list[str]) -> list[type[BaseModel]]:
-    """Only offer data tools this agent has connectors for, plus board tools."""
-    return [DATA_TOOLS[c] for c in capabilities] + list(BOARD_TOOLS.values())
+def tools_for(capabilities: list[str], choices: dict[str, list[str]] | None = None) -> list[type[BaseModel]]:
+    """Only offer data tools this agent has connectors for, plus board tools.
+    `choices`: capability -> connector names, when several connectors provide it. The tool then gets a
+    required `connector` argument: the model picks the source (they hold different data)."""
+    tools = []
+    for c in capabilities:
+        cls, names = DATA_TOOLS[c], (choices or {}).get(c)
+        if names:
+            cls = create_model(cls.__name__, __base__=cls, __doc__=cls.__doc__, connector=(
+                Literal[tuple(names)], Field(..., description="Which connector to query. They hold different "
+                                                              "data: see the data source notes.")))
+        tools.append(cls)
+    return tools + list(BOARD_TOOLS.values())
+
+
+def agent_tools(agent) -> list[type[BaseModel]]:
+    return tools_for(agent.capabilities, {c: agent.connector_choices(c) for c in agent.capabilities})
 
 
 def anthropic_spec(cls: type[BaseModel]) -> dict:

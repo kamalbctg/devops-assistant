@@ -23,7 +23,7 @@ DEFAULT_PROMQL = {
 
 class Prometheus(HttpConnector):
     type = "prometheus"
-    supported = {"metrics.query"}
+    capabilities = {"metrics.query"}
     LABEL = "Prometheus"
     FIELDS = [
         {"key": "url", "label": "URL", "type": "text", "required": True, "help": "http://prometheus:9090"},

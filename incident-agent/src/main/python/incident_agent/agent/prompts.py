@@ -101,6 +101,10 @@ def render_context(view: dict) -> str:
         f"SCOPE: service={scope.service} symptom={scope.symptom} since={scope.since}" + (f" until={scope.until}" if scope.until else ""),
         *([f"ALERT: {scope.alert.get('name')} [{scope.alert.get('state')}] monitor {scope.alert.get('monitor_id')} "
            f"query: {scope.alert.get('query', '')[:200]}"] if scope.alert else []),
+        *([f"SERVICES: the alert covers {', '.join(view['alert_services'])}; none stood out in the first check. "
+           "Set `service` in each call."] if view.get("alert_services") else []),
+        *([f"KNOWN SERVICES (use these names for a backend or dependency): {', '.join(view['services'][:300])}"]
+          if view.get("services") else []),
         f"BUDGET: {view['calls_left']} data tool calls left, {view['turns_left']} turns left",
         f"NOT CONFIGURED (cannot check): {', '.join(view['not_configured']) or 'none'}",
         "",
@@ -110,7 +114,7 @@ def render_context(view: dict) -> str:
     lines += [f"  {h.id} [{h.status}] {h.statement}" + (f"  evidence={h.evidence_ids}" if h.evidence_ids else "")
               for h in hyps] or ["  (none yet)"]
     lines += ["", "EVIDENCE (summaries only):"]
-    lines += [f"  {e.id} {e.capability} {e.args.get('metric', '') or e.args.get('query', '')} "
+    lines += [f"  {e.id} {e.capability} via {e.connector} {e.args.get('metric', '') or e.args.get('query', '')} "
               f"[{e.hypothesis or 'baseline'}]: {e.summary}" for e in view["evidence"]] or ["  (none yet)"]
     if view["notes"]:
         lines += ["", "NOTES FROM LAST TURN:"] + [f"  - {n}" for n in view["notes"]]

@@ -27,8 +27,9 @@ services:
       CONNECTOR_SECRET_KEY: ${CONNECTOR_SECRET_KEY:-}
       SEED_DEMO: ${SEED_DEMO:-true}
       STRICT_READ_ONLY: ${STRICT_READ_ONLY:-false}
-      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-change-me}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}   # empty = webhooks disabled
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
 volumes:
   pgdata:
   appdata:

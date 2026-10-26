@@ -11,6 +11,8 @@ def describe(node: str, update: dict) -> str | None:
         text = f"scope: {s.service or 'not named — checking all services'} / {s.symptom} / from {s.since}" + (f" to {s.until}" if s.until else "")
         if s.alert:
             text += f"\nalert link: monitor {s.alert.get('monitor_id')} — {s.alert.get('name') or '?'} [{s.alert.get('state') or '?'}]"
+            if not s.service and len(s.alert.get("services") or []) > 1:
+                text += f"\nmonitor watches: {', '.join(s.alert['services'])}"
             text += "".join(f"\nnote: {n}" for n in s.alert.get("notes", []))
         return text + (f"  REFUSED: {update['refused']}" if update.get("refused") else "")
     if node == "baseline_query":

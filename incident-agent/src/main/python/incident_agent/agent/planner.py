@@ -10,7 +10,7 @@ structure (nodes, edges, state) is independent of the model.
 """
 
 import re
-from typing import Protocol
+from typing import Protocol, get_args
 
 from incident_agent.agent.prompts import render_context, system_prompt
 from incident_agent.agent.state import Scope
@@ -24,17 +24,18 @@ class Planner(Protocol):
 
 
 class ClaudePlanner:
-    def __init__(self, strong: str = "claude-opus-5-5", fast: str = "claude-haiku-4-5",
+    def __init__(self, strong: str = "claude-opus-5-5", fast: str = "claude-haiku-5-5",
                  effort: str | None = "medium", api_key: str | None = None, headers: dict | None = None):
         from langchain_anthropic import ChatAnthropic
 
         # fast model: cheap extraction. strong model: the investigation loop.
+        # Thinking is always on for current models and counts toward max_tokens, so leave room for it.
         key = {"api_key": api_key} if api_key else {}
         if headers:
             key["default_headers"] = headers
         self.model = strong
-        self.fast = ChatAnthropic(model=fast, max_tokens=1024, **key)
-        self.strong = ChatAnthropic(model=strong, max_tokens=4096, **({"effort": effort} if effort else {}), **key)
+        self.fast = ChatAnthropic(model=fast, max_tokens=4096, effort="low", **key)
+        self.strong = ChatAnthropic(model=strong, max_tokens=16000, **({"effort": effort} if effort else {}), **key)
 
     def intake(self, question, services):
         extractor = self.fast.with_structured_output(Scope, method="json_schema")
@@ -102,12 +103,16 @@ class ScriptedPlanner:
         return Scope(service=service, symptom=symptom, since=t.group(1) if t else None)
 
     def next_actions(self, view):
-        svc, since = view["scope"].service, view["scope"].since
+        svc, since = view["scope"].service or next(iter(view.get("alert_services") or []), None), view["scope"].since
         hyps, evidence = view["hypotheses"], view["evidence"]
         caps = {t.__name__ for t in view["tools"]}
+        # several connectors for one tool: take the first offered (a real model reads the source notes)
+        source = {t.__name__: {"connector": get_args(t.model_fields["connector"].annotation)[0]}
+                  for t in view["tools"] if "connector" in t.model_fields}
 
         def call(cap, extra, hyp):
-            return {"name": cap.replace(".", "_"), "args": {"service": svc, "since": since, "hypothesis": hyp, **extra}}
+            name = cap.replace(".", "_")
+            return {"name": name, "args": {"service": svc, "since": since, "hypothesis": hyp, **source.get(name, {}), **extra}}
 
         def done(cap, extra):
             return any(e.capability == cap and all(e.args.get(k) == v for k, v in extra.items()) for e in evidence)

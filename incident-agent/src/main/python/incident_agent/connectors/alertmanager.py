@@ -14,7 +14,7 @@ from .http import HttpConnector
 
 class Alertmanager(HttpConnector):
     type = "alertmanager"
-    supported = {"alerts.list"}
+    capabilities = {"alerts.list"}
     LABEL = "Alertmanager"
     FIELDS = [
         {"key": "url", "label": "URL", "type": "text", "required": True,

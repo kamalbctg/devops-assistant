@@ -39,10 +39,16 @@ class AgentConfig:
     llm_label: str = ""
     prompt: str | None = None  # agent instructions (stored per agent); None only for agents built in code
     analysis_fields: list[dict] = field(default_factory=list)  # post-investigation analysis (agent/analysis.py)
+    _known: list[str] | None = field(default=None, repr=False)  # cache for known_services()
 
     def connector_for(self, capability: str) -> Connector | None:
-        """First connector that provides the capability (order chosen in the agent = priority)."""
+        """Any connector that provides the capability (all are equal; used to know what is covered)."""
         return next(iter(self.connectors_for(capability)), None)
+
+    def connector_choices(self, capability: str) -> list[str]:
+        """Names to choose from when several connectors provide the capability; [] when there is one."""
+        names = [c.name for c in self.connectors_for(capability)]
+        return names if len(names) > 1 else []
 
     def connectors_for(self, capability: str) -> list[Connector]:
         return [c for c in self.connectors if capability in c.provides]
@@ -55,16 +61,18 @@ class AgentConfig:
         return bool(service) and (self.all_services or service.lower() in {s.lower() for s in self.services})
 
     def known_services(self) -> list[str]:
-        """The explicit list, or — for "all services" — what the connectors report."""
+        """The explicit list, or — for "all services" — what the connectors report (read once per run)."""
         if self.services:
             return self.services
-        found: set[str] = set()
-        for c in self.connectors:
-            try:
-                found |= set(c.list_services())
-            except ConnectorError as e:
-                self.warnings.append(str(e))
-        return sorted(found)
+        if self._known is None:
+            found: set[str] = set()
+            for c in self.connectors:
+                try:
+                    found |= set(c.list_services())
+                except ConnectorError as e:
+                    self.warnings.append(str(e))
+            self._known = sorted(found)
+        return self._known
 
     @property
     def capabilities(self) -> list[str]:
@@ -78,6 +86,24 @@ class AgentConfig:
 # ---------------------------------------------------------------- connectors
 
 MAX_PROMPT = 20000
+
+# Investigation history per agent: kept at most 7 days, at most 100 at a time (lower per agent if wanted).
+MAX_KEEP_DAYS, MAX_INVESTIGATIONS = 7, 100
+DEFAULT_RETENTION = {"keep_days": MAX_KEEP_DAYS, "max_investigations": MAX_INVESTIGATIONS}
+
+
+def retention_values(data: dict | None) -> dict:
+    """{"keep_days": 1–7, "max_investigations": 1–100}; missing keys take the maximum. Raises ValueError."""
+    merged = {**DEFAULT_RETENTION, **{k: v for k, v in (data or {}).items() if v not in (None, "")}}
+    try:
+        r = {k: int(merged[k]) for k in DEFAULT_RETENTION}
+    except (TypeError, ValueError) as e:
+        raise ValueError("retention: days and max investigations must be numbers") from e
+    if not 1 <= r["keep_days"] <= MAX_KEEP_DAYS:
+        raise ValueError(f"retention: keep investigations 1–{MAX_KEEP_DAYS} days")
+    if not 1 <= r["max_investigations"] <= MAX_INVESTIGATIONS:
+        raise ValueError(f"retention: max investigations 1–{MAX_INVESTIGATIONS}")
+    return r
 
 def make_connector(row: dict, box: SecretBox, timezone: str = "UTC") -> Connector:
     cls = CONNECTOR_TYPES[row["type"]]
@@ -126,9 +152,9 @@ def connector_values(data: dict, box: SecretBox, existing: dict | None = None) -
     mode = data.get("mode", "live")
     if mode not in ("live", "fake"):
         raise ValueError("mode must be live or fake")
-    provides = data.get("provides") or sorted(cls.supported, key=CAPABILITIES.index)
-    if not set(provides) <= cls.supported:
-        raise ValueError(f"{cls.LABEL} can provide only {sorted(cls.supported)}")
+    provides = data.get("provides") or sorted(cls.capabilities, key=CAPABILITIES.index)
+    if not set(provides) <= cls.capabilities:
+        raise ValueError(f"{cls.LABEL} can provide only {sorted(cls.capabilities)}")
 
     raw = data.get("settings") or {}
     settings = {}
@@ -206,7 +232,10 @@ def agent_values(data: dict, store) -> dict:
     if missing:
         raise ValueError(f"unknown connectors: {missing}")
     b = data.get("budget") or {}
-    budget = {"max_tool_calls": int(b.get("max_tool_calls", 12)), "max_turns": int(b.get("max_turns", 8))}
+    try:
+        budget = {"max_tool_calls": int(b.get("max_tool_calls", 12)), "max_turns": int(b.get("max_turns", 8))}
+    except (TypeError, ValueError) as e:
+        raise ValueError("budget: tool calls and turns must be numbers") from e
     if not (1 <= budget["max_tool_calls"] <= 50 and 1 <= budget["max_turns"] <= 30):
         raise ValueError("budget: tool calls 1–50, turns 1–30")
     tz = data.get("timezone") or "UTC"
@@ -217,10 +246,12 @@ def agent_values(data: dict, store) -> dict:
     return {"name": name, "type": atype, "description": (data.get("description") or "").strip(), "services": services,
             "connector_ids": list(dict.fromkeys(ids)), "budget": budget, "timezone": tz,
             "llm": llm_values(data.get("llm")), "prompt": prompt_value(data.get("prompt")),
-            "analysis_fields": fields_values(data.get("analysis_fields"))}
+            "analysis_fields": fields_values(data.get("analysis_fields")),
+            "retention": retention_values(data.get("retention"))}
 
 
 def public_agent(row: dict, store) -> dict:
+    in_use = store.prompt_version(row["id"])
     conns = [store.get_connector(i) for i in row["connector_ids"]]
     conns = [c for c in conns if c]
     covered = {cap for c in conns for cap in c["provides"]}
@@ -230,6 +261,8 @@ def public_agent(row: dict, store) -> dict:
             "type": t["type"], "type_label": t["label"], "icon": t["icon"],
             "llm": llm_values(row.get("llm")), "llm_label": llm_label(llm_values(row.get("llm"))),
             "analysis_fields": row.get("analysis_fields") or [],
+            "retention": retention_values(row.get("retention")),
+            "prompt_version": in_use["version"] if in_use else None,
             "prompt": row.get("prompt") or DEFAULT_INSTRUCTIONS.strip(), "prompt_is_default": (row.get("prompt") or "").strip() in ("", DEFAULT_INSTRUCTIONS.strip()),
             "warnings": (["Scripted mode uses fixed demo rules — choose a Claude model for real data"]
                          if llm_values(row.get("llm"))["model"] == SCRIPTED and any(c["mode"] == "live" for c in conns) else []),

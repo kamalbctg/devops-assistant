@@ -1,7 +1,8 @@
 """Database for connectors, agents and investigations.
 
 SQLite by default (DATA_DIR/incident-agent.db); Postgres when DATABASE_URL
-is set. Uses SQLAlchemy Core so the same code works on both.
+is set. Uses SQLAlchemy Core so the same code works on both. The tables below are
+the target schema; Alembic migrations (persistence/migrations) bring a database to it.
 """
 
 import os
@@ -38,14 +39,27 @@ agents = sa.Table(
     sa.Column("type", sa.String(50), nullable=False, default="incident_investigation"),
     sa.Column("description", sa.Text),
     sa.Column("services", sa.JSON, nullable=False),
-    sa.Column("connector_ids", sa.JSON, nullable=False),  # order = priority
+    sa.Column("connector_ids", sa.JSON, nullable=False),  # display order only: all connectors are equal
     sa.Column("budget", sa.JSON, nullable=False),
     sa.Column("timezone", sa.String(64), nullable=False, default="UTC"),
     sa.Column("llm", sa.JSON),  # {"model", "fast_model", "effort"}; NULL = defaults
-    sa.Column("prompt", sa.Text),  # agent instructions, stored for every agent
+    sa.Column("prompt", sa.Text),  # agent instructions, stored for every agent (= the text of prompt_version)
+    sa.Column("prompt_version", sa.Integer),  # the saved version in use; may be older than the newest one
     sa.Column("analysis_fields", sa.JSON),  # post-investigation analysis field definitions; NULL = none
+    sa.Column("retention", sa.JSON),  # {"keep_days", "max_investigations"}; NULL = the maximum (7 days, 100)
     sa.Column("created_at", sa.Float, nullable=False),
     sa.Column("updated_at", sa.Float, nullable=False),
+)
+
+# Every saved change of an agent's instructions; investigations record which version they ran with.
+# agents.prompt_version points at the one in use: switching back to an old version does not copy it.
+prompt_versions = sa.Table(
+    "prompt_versions", meta,
+    sa.Column("agent_id", sa.String(32), primary_key=True),
+    sa.Column("version", sa.Integer, primary_key=True),  # 1, 2, 3 ... per agent
+    sa.Column("prompt", sa.Text, nullable=False),
+    sa.Column("note", sa.String(300)),  # e.g. "restored from v2"
+    sa.Column("created_at", sa.Float, nullable=False),
 )
 
 settings = sa.Table(
@@ -86,34 +100,10 @@ class Store:
     def __init__(self, url: str):
         kw = {"connect_args": {"check_same_thread": False}} if url.startswith("sqlite") else {"pool_pre_ping": True}
         self.engine = sa.create_engine(url, **kw)
-        meta.create_all(self.engine)
-        self._migrate()
-        self.lock = threading.Lock()
+        from incident_agent.persistence.schema import upgrade
 
-    def _migrate(self):
-        """Tiny forward-only migrations for databases created by older versions."""
-        ccols = {c["name"] for c in sa.inspect(self.engine).get_columns("connectors")}
-        if "notes" not in ccols:
-            with self.engine.begin() as c:
-                c.execute(sa.text("ALTER TABLE connectors ADD COLUMN notes TEXT"))
-        cols = {c["name"] for c in sa.inspect(self.engine).get_columns("agents")}
-        if "type" not in cols:
-            with self.engine.begin() as c:
-                c.execute(sa.text("ALTER TABLE agents ADD COLUMN type VARCHAR(50) NOT NULL DEFAULT 'incident_investigation'"))
-        if "analysis_fields" not in cols:
-            with self.engine.begin() as c:
-                c.execute(sa.text("ALTER TABLE agents ADD COLUMN analysis_fields JSON"))
-        if "prompt" not in cols:
-            with self.engine.begin() as c:
-                c.execute(sa.text("ALTER TABLE agents ADD COLUMN prompt TEXT"))
-        with self.engine.begin() as c:  # agents saved before prompts were always stored: store the default
-            from incident_agent.agent.prompts import DEFAULT_INSTRUCTIONS
-            c.execute(agents.update().where(agents.c.prompt.is_(None)).values(prompt=DEFAULT_INSTRUCTIONS.strip()))
-        if "llm" not in cols:
-            with self.engine.begin() as c:
-                c.execute(sa.text("ALTER TABLE agents ADD COLUMN llm JSON"))
-                # agents created before this column ran without an LLM: keep that until edited
-                c.execute(agents.update().values(llm={"model": "scripted", "fast_model": "claude-haiku-4-5", "effort": "medium"}))
+        upgrade(self.engine)
+        self.lock = threading.Lock()
 
     # ---- generic helpers ----
 
@@ -171,15 +161,65 @@ class Store:
     def get_agent(self, id_):
         return self._one(agents, id_)
 
-    def create_agent(self, values: dict):
+    def create_agent(self, values: dict, prompt_note: str | None = "created"):
         now = time.time()
-        return self._insert(agents, {"id": new_id(), "created_at": now, "updated_at": now, **values})
+        row = self._insert(agents, {"id": new_id(), "created_at": now, "updated_at": now, **values})
+        if values.get("prompt"):
+            self.save_prompt_version(row["id"], values["prompt"], prompt_note)
+        return row
 
-    def update_agent(self, id_, values: dict):
-        return self._update(agents, id_, {**values, "updated_at": time.time()})
+    def update_agent(self, id_, values: dict, prompt_note: str | None = None):
+        n = self._update(agents, id_, {**values, "updated_at": time.time()})
+        if n and values.get("prompt"):
+            self.save_prompt_version(id_, values["prompt"], prompt_note)
+        return n
 
     def delete_agent(self, id_):
+        with self.engine.begin() as c:
+            c.execute(prompt_versions.delete().where(prompt_versions.c.agent_id == id_))
         return self._delete(agents, id_)
+
+    # ---- prompt versions ----
+
+    def save_prompt_version(self, agent_id: str, prompt: str, note: str | None = None) -> int:
+        """Record the agent's instructions as a new version if they differ from the one in use,
+        and make it the one in use. Returns the version in use."""
+        with self.lock, self.engine.begin() as c:
+            active = c.execute(sa.select(agents.c.prompt_version).where(agents.c.id == agent_id)).scalar()
+            cur = c.execute(sa.select(prompt_versions.c.prompt).where(
+                prompt_versions.c.agent_id == agent_id, prompt_versions.c.version == active)).scalar() if active else None
+            if cur == prompt:
+                return active
+            last = c.execute(sa.select(sa.func.max(prompt_versions.c.version))
+                             .where(prompt_versions.c.agent_id == agent_id)).scalar() or 0
+            c.execute(prompt_versions.insert().values(agent_id=agent_id, version=last + 1, prompt=prompt,
+                                                      note=(note or "").strip()[:300] or None, created_at=time.time()))
+            c.execute(agents.update().where(agents.c.id == agent_id).values(prompt_version=last + 1))
+            return last + 1
+
+    def activate_prompt_version(self, agent_id: str, version: int) -> bool:
+        """Switch the agent to an existing saved version, without copying it. False if it does not exist."""
+        row = self.prompt_version(agent_id, version)
+        if row is None:
+            return False
+        self._update(agents, agent_id, {"prompt": row["prompt"], "prompt_version": version, "updated_at": time.time()})
+        return True
+
+    def prompt_versions(self, agent_id: str) -> list[dict]:
+        """Newest first, with the text."""
+        return self._all(prompt_versions, order=prompt_versions.c.version.desc(),
+                         where=prompt_versions.c.agent_id == agent_id)
+
+    def prompt_version(self, agent_id: str, version: int | None = None) -> dict | None:
+        """One version, or the one in use when `version` is None (the newest if none is marked)."""
+        if version is None:
+            agent = self.get_agent(agent_id)
+            version = agent.get("prompt_version") if agent else None
+        where = prompt_versions.c.agent_id == agent_id
+        if version is not None:
+            where = sa.and_(where, prompt_versions.c.version == version)
+        rows = self._all(prompt_versions, order=prompt_versions.c.version.desc(), where=where, limit=1)
+        return rows[0] if rows else None
 
     def agents_using(self, connector_id):
         return [a for a in self.list_agents() if connector_id in a["connector_ids"]]
@@ -202,11 +242,31 @@ class Store:
             if not self._update(investigations, row["id"], row):
                 self._insert(investigations, row)
 
+    def count_investigations(self, agent_id: str) -> int:
+        q = sa.select(sa.func.count()).select_from(investigations).where(investigations.c.agent_id == agent_id)
+        with self.engine.connect() as c:
+            return c.execute(q).scalar_one()
+
+    def finished_before(self, cutoff: float) -> list[dict]:
+        """id, agent_id, created of investigations started before `cutoff` that are not running."""
+        q = (sa.select(investigations.c.id, investigations.c.agent_id, investigations.c.created)
+             .where(investigations.c.created < cutoff, investigations.c.status != "running"))
+        with self.engine.connect() as c:
+            return [dict(r._mapping) for r in c.execute(q)]
+
+    def delete_investigation(self, id_):
+        return self._delete(investigations, id_)
+
     def get_investigation(self, id_):
         return self._one(investigations, id_)
 
-    def list_investigations(self, limit=100, agent_id: str | None = None):
-        where = investigations.c.agent_id == agent_id if agent_id else None
+    def list_investigations(self, limit=100, agent_id: str | None = None, status: str | None = None):
+        conds = []
+        if agent_id:
+            conds.append(investigations.c.agent_id == agent_id)
+        if status:
+            conds.append(investigations.c.status == status)
+        where = sa.and_(*conds) if conds else None
         return self._all(investigations, order=investigations.c.created.desc(), where=where, limit=limit)
 
     def recent_by_dedup(self, key: str, since: float):

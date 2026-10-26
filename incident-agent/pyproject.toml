@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.1",
     "clickhouse-connect>=1.9.0",
     "cryptography>=50.0.2",
     "elasticsearch>=8.15,<9",

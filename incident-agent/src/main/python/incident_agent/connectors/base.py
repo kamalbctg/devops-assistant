@@ -14,7 +14,10 @@ The summarizer only knows these shapes:
                     "at", "recent"} | None, "node"}], "deployment": {...} | None, "hpa": {...} | None,
                     "first_problem": "HH:MM:SS" | None}
     traces.search  {"count": int, "p99_ms": float | None, "error_count": int,
-                    "slowest_ops": [[name, p99_ms], ...], "db_p99_ms": float | None}
+                    "slowest_ops": [[name, p99_ms], ...], "db_p99_ms": float | None,
+                    optional: "server_errors": int (5xx), "errors_by": [[status_code, route, count], ...],
+                    "downstream_5xx": {service: error_count}, "traces_checked": int}
+    metrics.query  optional "threshold": float when the query is a monitor's own condition
 
 Modes:
     live — real client calls
@@ -67,18 +70,10 @@ class RawResult:
     data: dict[str, Any]
 
 
-def _describe(e: Exception) -> str:
-    """Short error text; for HTTP errors the status plus the body's reason instead of a docs link."""
-    response = getattr(e, "response", None)
-    if response is not None and hasattr(response, "status_code"):
-        return f"HTTP {response.status_code}: {(getattr(response, 'text', '') or '')[:300]}"
-    return f"{type(e).__name__}: {e}"
-
-
 class Connector(ABC):
     type: str = "base"
     LABEL: str = "Base"
-    supported: set[str] = set()
+    capabilities: set[str] = set()  # what this source can serve; `provides` is the part enabled per connector
     # Form schema for the UI. Field: {key, label, type, required, default, help, options}
     #   type: text | number | bool | select | list (comma separated) | json
     FIELDS: list[dict] = []
@@ -89,13 +84,13 @@ class Connector(ABC):
 
     @classmethod
     def schema(cls) -> dict:
-        return {"type": cls.type, "label": cls.LABEL, "capabilities": sorted(cls.supported, key=CAPABILITIES.index),
+        return {"type": cls.type, "label": cls.LABEL, "capabilities": sorted(cls.capabilities, key=CAPABILITIES.index),
                 "fields": cls.FIELDS, "secrets": cls.SECRETS, "doc": (cls.__doc__ or "").strip(),
                 "default_notes": cls.DEFAULT_NOTES.strip()}
 
     def __init__(self, provides: list[str], settings: dict | None = None, mode: str = "live", timezone: str = "UTC",
                  secrets: dict | None = None, name: str = "", notes: str | None = None):
-        unknown = set(provides) - self.supported
+        unknown = set(provides) - self.capabilities
         if unknown:
             raise ConnectorError(f"{self.type} cannot provide {sorted(unknown)}")
         if mode not in ("live", "fake"):
@@ -170,9 +165,9 @@ class Connector(ABC):
         if self.mode == "fake":
             from .fake import fake_result
 
-            return RawResult(self.type, native, fake_result(self.type, capability, args, self.settings))
+            return RawResult(self.name, native, fake_result(self.type, capability, args, self.settings))
         try:
-            return RawResult(self.type, native, self.fetch(capability, args))
+            return RawResult(self.name, native, self.fetch(capability, args))
         except ConnectorError:
             raise
         except Exception as e:  # network, auth, bad response: report, never crash the run
@@ -232,8 +227,11 @@ class Connector(ABC):
 
 
 def downsample(points: list, n: int = 12) -> list:
+    """At most n points: the first, the last, and the highest of each bucket between them,
+    so a short spike survives (taking every k-th point can skip it)."""
     if len(points) <= n:
         return points
-    step = len(points) / n
-    picked = [points[int(i * step)] for i in range(n)]
-    return picked[:-1] + [points[-1]]
+    inner, k = points[1:-1], n - 2
+    size = len(inner) / k
+    buckets = [inner[int(i * size):int((i + 1) * size)] for i in range(k)]
+    return [points[0], *(max(b, key=lambda p: p[1]) for b in buckets if b), points[-1]]

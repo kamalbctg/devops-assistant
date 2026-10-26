@@ -11,6 +11,8 @@ Environment:
     STRICT_READ_ONLY      refuse connector keys that could write (default false: warn only)
     WEBHOOK_TOKEN         shared secret for /webhooks/* (webhooks are disabled without it)
     HOST, PORT            default 127.0.0.1:8080
+    ALLOWED_HOSTS         Host headers accepted, comma separated (default localhost,127.0.0.1;
+                          add your proxy's hostname). Blocks DNS rebinding.
 
 There are no user accounts: run it behind your SSO proxy before sharing it.
 """
@@ -25,6 +27,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -49,7 +52,11 @@ from incident_agent.connectors import CONNECTOR_TYPES, ConnectorError
 from incident_agent.persistence.checkpoint import make_checkpointer
 from incident_agent.persistence.store import Store, database_url
 from incident_agent.security.secrets import SecretBox
-from incident_agent.service.investigation_service import InvestigationService, public
+from incident_agent.service.investigation_service import (
+    InvestigationService,
+    LimitReached,
+    public,
+)
 
 
 class StartRequest(BaseModel):
@@ -70,6 +77,8 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
         seed_demo(store, box)
     service = service or InvestigationService(store, box, None, make_checkpointer())
     app = FastAPI(title="Incident Investigation Agent")
+    hosts = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
 
     def bad_request(e: Exception):
         raise HTTPException(400, str(e)) from e
@@ -224,7 +233,8 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
             bad_request(e)
         if any(a["name"] == values["name"] for a in store.list_agents()):
             raise HTTPException(409, f"an agent named {values['name']!r} already exists")
-        return public_agent(store.get_agent(store.create_agent(values)["id"]), store)
+        aid = store.create_agent(values, body.get("prompt_note") or "created")["id"]
+        return public_agent(store.get_agent(aid), store)
 
     @app.post("/services/discover")
     def services_discover(body: dict):
@@ -245,8 +255,30 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
             bad_request(e)
         if any(a["name"] == values["name"] and a["id"] != aid for a in store.list_agents()):
             raise HTTPException(409, f"an agent named {values['name']!r} already exists")
-        store.update_agent(aid, values)
+        store.update_agent(aid, values, body.get("prompt_note"))
         return public_agent(store.get_agent(aid), store)
+
+    @app.get("/agents/{aid}/prompt-versions")
+    def prompt_versions(aid: str):
+        """Every saved version of the agent's instructions, newest first."""
+        agent_or_404(aid)
+        return store.prompt_versions(aid)
+
+    @app.post("/agents/{aid}/prompt-versions/{version}/activate")
+    def activate_prompt_version(aid: str, version: int):
+        """Make an older saved version the one in use (no copy; later edits become new versions)."""
+        agent_or_404(aid)
+        if not store.activate_prompt_version(aid, version):
+            raise HTTPException(404, "prompt version not found")
+        return public_agent(store.get_agent(aid), store)
+
+    @app.get("/agents/{aid}/prompt-versions/{version}")
+    def prompt_version(aid: str, version: int):
+        agent_or_404(aid)
+        row = store.prompt_version(aid, version)
+        if row is None:
+            raise HTTPException(404, "prompt version not found")
+        return row
 
     @app.delete("/agents/{aid}", status_code=204)
     def delete_agent(aid: str):
@@ -269,14 +301,29 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
             return public(service.start(req.question.strip(), req.agent_id), with_events=False)
         except KeyError as e:
             raise HTTPException(404, "agent not found") from e
+        except LimitReached as e:
+            raise HTTPException(409, str(e)) from e
+
+    def current_names(runs: list[dict]) -> list[dict]:
+        """Runs keep the agent name from when they started; show the agent's name now if it still exists."""
+        names = {a["id"]: a["name"] for a in store.list_agents()}
+        return [{**r, "agent": names.get(r["agent_id"], r["agent"])} for r in runs]
 
     @app.get("/investigations")
     def list_runs(agent_id: str | None = None):
-        return [public(r, with_events=False) for r in service.list(agent_id)]
+        return current_names([public(r, with_events=False) for r in service.list(agent_id)])
 
     @app.get("/investigations/{run_id}")
     def get_run(run_id: str):
-        return public(run_or_404(run_id))
+        return current_names([public(run_or_404(run_id))])[0]
+
+    @app.delete("/investigations/{run_id}", status_code=204)
+    def delete_run(run_id: str):
+        run_or_404(run_id)
+        try:
+            service.delete(run_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
 
     @app.post("/investigations/{run_id}/resume")
     def resume(run_id: str, req: ResumeRequest):
@@ -294,7 +341,9 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
         async def gen():
             sent = 0
             while True:
-                row = service.get(run_id)
+                row = await asyncio.to_thread(service.get, run_id)
+                if row is None:
+                    return
                 events = row["data"].get("events", [])
                 for e in events[sent:]:
                     yield f"event: step\ndata: {json.dumps({'node': e['node'], 'text': e['text']})}\n\n"
@@ -323,7 +372,10 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
         if dup:
             return {"status": "duplicate", "investigation": dup["id"]}
         at = started.astimezone(ZoneInfo(agent["timezone"])).strftime("%H:%M")
-        run = service.start(f"{title} — alert for {service_name} since {at}", agent["id"], source=source, dedup_key=key)
+        try:
+            run = service.start(f"{title} — alert for {service_name} since {at}", agent["id"], source=source, dedup_key=key)
+        except LimitReached as e:
+            return {"status": "refused", "reason": str(e), "agent": agent["name"]}
         return {"status": "started", "investigation": run["id"], "agent": agent["name"]}
 
     @app.post("/webhooks/datadog", status_code=202)
@@ -356,7 +408,10 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
             if alert.get("status") != "firing" or not svc or svc in seen:
                 continue
             seen.add(svc)
-            started = datetime.fromisoformat(alert.get("startsAt", datetime.now(timezone.utc).isoformat()).replace("Z", "+00:00"))
+            try:
+                started = datetime.fromisoformat(alert["startsAt"].replace("Z", "+00:00"))
+            except (KeyError, ValueError, AttributeError):
+                started = datetime.now(timezone.utc)
             results.append(trigger(svc, labels.get("alertname", "Alert"), started, "alertmanager",
                                    f"alertmanager:{body.get('groupKey')}:{svc}"))
         return {"results": results} if results else {"status": "ignored", "reason": "no firing alerts with a service label"}
