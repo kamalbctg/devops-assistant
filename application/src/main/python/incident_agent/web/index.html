@@ -106,6 +106,9 @@ textarea { min-height: 80px; resize: vertical; }
 .steps li:last-child { border-bottom: 0; }
 .steps .node { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 .steps .text { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.steps .why { margin-top: 4px; }
+.steps .why summary { cursor: pointer; font-size: 12px; color: var(--accent); }
+.steps .why div { white-space: pre-wrap; font-size: 12px; margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .ask { border-color: var(--warn); background: var(--warn-soft); }
@@ -457,7 +460,22 @@ function renderLiveIdle() {
     <div class="hint">No investigation running. Start one above: its steps stream here live.</div>`;
 }
 
-const stepLi = s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span></li>`;
+// the model's reasoning for an investigate turn (stored with the investigation, masked), collapsed
+const whyHtml = s => ((s.update || {}).reasoning || []).map(r => `<details class="why"><summary>Why${r.model ? ` · ${esc(r.model)}` : ""}</summary><div>${esc(r.text)}</div></details>`).join("");
+// Stop: the current step finishes, then the report is written from what was found so far
+const stoppable = run => run.status === "running" || run.status === "waiting_input";
+const stopping = run => (run.events || []).some(e => e.node === "stop");
+const stopBtn = (run, id) => stoppable(run) ? `<button class="btn small danger" id="${id}" ${stopping(run) ? "disabled" : ""}>${stopping(run) ? "Stopping…" : "Stop"}</button>` : "";
+function wireStop(run, id) {
+  const b = $(id);
+  if (!b || b.disabled) return;
+  b.onclick = async () => {
+    if (!confirm("Stop this investigation?\n\nThe current step finishes, then a report is written from the evidence found so far.")) return;
+    b.disabled = true; b.textContent = "Stopping…";
+    try { await post(`/investigations/${run.id}/stop`); } catch (e) { alert(e.message); b.disabled = false; b.textContent = "Stop"; }
+  };
+}
+const stepLi = s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}${whyHtml(s)}</span></li>`;
 
 function renderLive(run) {
   const el = $("live");
@@ -469,7 +487,7 @@ function renderLive(run) {
         <div class="q" title="${esc(run.question)}">${esc(runTitle(run.question))}</div>
         <div class="hint" style="margin-top:2px">started ${ago(run.created)}${run.source !== "chat" ? " · from " + esc(run.source) : ""}</div></div>
       <div style="text-align:right">${badge(run.status)}${v ? " " + badge(v.confidence) : ""}
-        <div style="margin-top:6px"><a href="#/run/${esc(run.id)}">${running ? "Open run →" : "Full report →"}</a></div></div>
+        <div style="margin-top:6px">${stopBtn(run, "stopLive")} <a href="#/run/${esc(run.id)}">${running ? "Open run →" : "Full report →"}</a></div></div>
     </div>
     ${run.status === "failed" ? `<div class="gap mono">${esc(run.error)}</div>` : ""}
     ${c ? `<div class="live-sum"><b>${esc(String(v.status).replace(/_/g, " "))}:</b> ${esc(c.summary)}</div>` : ""}
@@ -477,20 +495,25 @@ function renderLive(run) {
     ${!run.events.length ? `<div class="hint" id="liveEmpty">${running ? "Starting…" : "No steps."}</div>` : ""}`;
   const ul = $("liveSteps");
   ul.scrollTop = ul.scrollHeight;
+  wireStop(run, "stopLive");
 }
 
+let watchSeq = 0;
 async function watchLive(id) {
   if (stream) { stream.close(); stream = null; }
-  let run;
-  try { run = await api("/investigations/" + id); } catch (e) { return renderLiveIdle(); }
+  // claim the live view before the fetch: the 4 s poll must not start a second watch (two streams = every step twice)
+  const mine = ++watchSeq;
   liveRun = id;
+  let run;
+  try { run = await api("/investigations/" + id); } catch (e) { return mine === watchSeq && renderLiveIdle(); }
+  if (mine !== watchSeq) return;  // a newer watch took over while this one was loading
   renderLive(run);
   renderAgentRuns(run.agent_id);
   if (run.status !== "running") return;
-  stream = new EventSource(`/investigations/${id}/stream`);
+  const es = stream = new EventSource(`/investigations/${id}/stream`);
   let seen = 0;
-  stream.addEventListener("step", e => {
-    if (++seen <= run.events.length || liveRun !== id) return;  // the stream replays steps already shown
+  es.addEventListener("step", e => {
+    if (es !== stream || ++seen <= run.events.length || liveRun !== id) return;  // the stream replays steps already shown
     const s = JSON.parse(e.data);
     run.events.push(s);
     const ul = $("liveSteps");
@@ -501,12 +524,14 @@ async function watchLive(id) {
     if (atBottom) ul.scrollTop = ul.scrollHeight;
   });
   const finish = async () => {
-    if (stream) { stream.close(); stream = null; }
+    es.close();
+    if (es !== stream) return;
+    stream = null;
     await loadRuns();
     if (liveRun === id && $("live")) renderLive(await api("/investigations/" + id));
   };
-  ["done", "failed", "waiting_input"].forEach(ev => stream.addEventListener(ev, finish));
-  stream.onerror = () => { if (stream) { stream.close(); stream = null; setTimeout(() => liveRun === id && $("live") && watchLive(id), 1500); } };
+  ["done", "failed", "waiting_input"].forEach(ev => es.addEventListener(ev, finish));
+  es.onerror = () => { es.close(); if (es === stream) { stream = null; setTimeout(() => liveRun === id && $("live") && watchLive(id), 1500); } };
 }
 
 function renderAgentRuns(id) {
@@ -518,8 +543,11 @@ function renderAgentRuns(id) {
   if ($("runCount")) { $("runCount").textContent = `· ${runs.length} / ${max}`; $("runCount").classList.toggle("warn-t", runs.length >= max); }
   if ($("start")) {
     const full = runs.length >= max;
-    $("start").disabled = full;
-    $("full").innerHTML = full ? `<div class="gap">Limit reached: ${runs.length} of ${max} investigations kept. Delete old ones (🗑 in the list) to start a new one.</div>` : "";
+    // one investigation per agent at a time: Start waits until the running one ends (or is stopped)
+    const busy = runs.find(r => r.status === "running" || r.status === "waiting_input");
+    $("start").disabled = full || !!busy;
+    $("full").innerHTML = full ? `<div class="gap">Limit reached: ${runs.length} of ${max} investigations kept. Delete old ones (🗑 in the list) to start a new one.</div>`
+      : busy ? `<div class="hint">One investigation at a time: <a href="#/run/${esc(busy.id)}">${esc(runTitle(busy.question))}</a> is in progress. Wait for it, or stop it.</div>` : "";
   }
   el.innerHTML = runs.length ? `<div class="run-list">${runs.map(r => `
     <div class="r ${r.id === liveRun ? "live" : ""}" data-run="${esc(r.id)}" title="${esc(r.question)}">
@@ -555,7 +583,11 @@ async function start(agentId) {
     $("q").value = ""; $("err").textContent = "";
     await loadRuns();
     watchLive(run.id);
-  } catch (e) { $("err").textContent = e.message; }
+  } catch (e) {
+    let msg = e.message;
+    try { msg = JSON.parse(msg).message || msg; } catch (_) { /* plain text */ }
+    $("err").textContent = msg;
+  }
   $("start").disabled = false;
   renderAgentRuns(agentId);  // disables the button again if the agent is now full
 }
@@ -1056,9 +1088,7 @@ function follow(run) {
     if (seen <= run.events.length) return;  // already rendered from the initial fetch
     const s = JSON.parse(e.data);
     run.events.push(s);
-    const li = document.createElement("li");
-    li.innerHTML = `<span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span>`;
-    $("steps").appendChild(li);
+    $("steps").insertAdjacentHTML("beforeend", stepLi(s));
   });
   const finish = async () => { stream.close(); stream = null; await loadRuns(); if (current === run.id) openRun(run.id); };
   ["done", "failed", "waiting_input"].forEach(ev => stream.addEventListener(ev, finish));
@@ -1074,7 +1104,7 @@ function renderRun(run) {
         <div><h1 title="${esc(run.question)}" style="overflow-wrap:anywhere">${esc(runTitle(run.question))}</h1>
           <div class="sub" style="margin:0">${esc(run.agent)} · started ${ago(run.created)}${run.prompt_version ? ` · instructions v${run.prompt_version}` : ""} ${run.source !== "chat" ? "· from " + badge(run.source, "src") : ""}</div></div>
         <div style="display:flex;gap:8px;align-items:center;flex:none">${running ? '<span class="spinner"></span> ' : ""}${badge(run.status)}
-          ${!running ? '<button class="btn small danger" id="delRun">Delete</button>' : ""}</div>
+          ${stopBtn(run, "stopRun")}${!running ? '<button class="btn small danger" id="delRun">Delete</button>' : ""}</div>
       </div>
     </div>
     ${run.status === "waiting_input" ? askCard(run) : ""}
@@ -1082,12 +1112,13 @@ function renderRun(run) {
     ${run.verdict ? reportCards(run) : ""}
     <div class="card">
       <h2>Steps ${running ? '<span class="spinner"></span>' : ""}</h2>
-      <ul class="steps" id="steps">${run.events.map(s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}</span></li>`).join("")}</ul>
+      <ul class="steps" id="steps">${run.events.map(stepLi).join("")}</ul>
       ${!run.events.length ? `<div class="hint">${running ? "Starting…" : "No steps finished yet."}</div>` : ""}
     </div>
     ${run.audit && run.audit.length ? auditCard(run) : ""}`;
   if (run.status === "waiting_input") wireAsk(run);
   if ($("delRun")) $("delRun").onclick = async () => { if (await deleteRun(run)) go("#/agent/" + run.agent_id); };
+  wireStop(run, "stopRun");
   document.querySelectorAll("tr.ev").forEach(tr => tr.onclick = () => tr.nextElementSibling.hidden = !tr.nextElementSibling.hidden);
 }
 

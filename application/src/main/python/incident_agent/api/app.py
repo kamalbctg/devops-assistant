@@ -20,6 +20,7 @@ There are no user accounts: run it behind your SSO proxy before sharing it.
 import asyncio
 import hmac
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -54,9 +55,12 @@ from incident_agent.persistence.store import Store, database_url
 from incident_agent.security.secrets import SecretBox
 from incident_agent.service.investigation_service import (
     InvestigationService,
+    AgentBusy,
     LimitReached,
     public,
 )
+
+log = logging.getLogger(__name__)
 
 
 class StartRequest(BaseModel):
@@ -301,6 +305,8 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
             return public(service.start(req.question.strip(), req.agent_id), with_events=False)
         except KeyError as e:
             raise HTTPException(404, "agent not found") from e
+        except AgentBusy as e:
+            raise HTTPException(409, {"message": str(e), "running_id": e.running_id}) from e
         except LimitReached as e:
             raise HTTPException(409, str(e)) from e
 
@@ -333,6 +339,14 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
         except ValueError as e:
             raise HTTPException(409, str(e)) from e
 
+    @app.post("/investigations/{run_id}/stop")
+    def stop(run_id: str):
+        run_or_404(run_id)
+        try:
+            return public(service.stop(run_id), with_events=False)
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from e
+
     @app.get("/investigations/{run_id}/stream")
     async def stream(run_id: str):
         """Server-sent events: one per finished step, then the final status."""
@@ -346,7 +360,8 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
                     return
                 events = row["data"].get("events", [])
                 for e in events[sent:]:
-                    yield f"event: step\ndata: {json.dumps({'node': e['node'], 'text': e['text']})}\n\n"
+                    why = {"update": {"reasoning": r}} if (r := (e.get("update") or {}).get("reasoning")) else {}
+                    yield f"event: step\ndata: {json.dumps({'node': e['node'], 'text': e['text'], **why})}\n\n"
                 sent = len(events)
                 if row["status"] != "running":
                     yield f"event: {row['status']}\ndata: {json.dumps(public(row, with_events=False), default=str)}\n\n"
@@ -374,6 +389,9 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
         at = started.astimezone(ZoneInfo(agent["timezone"])).strftime("%H:%M")
         try:
             run = service.start(f"{title} — alert for {service_name} since {at}", agent["id"], source=source, dedup_key=key)
+        except AgentBusy as e:  # one investigation per agent: this alert is not investigated
+            log.warning("alert skipped (%s): %s is already investigating %s", key, agent["name"], e.running_id)
+            return {"status": "skipped", "reason": str(e), "agent": agent["name"], "investigation": e.running_id}
         except LimitReached as e:
             return {"status": "refused", "reason": str(e), "agent": agent["name"]}
         return {"status": "started", "investigation": run["id"], "agent": agent["name"]}

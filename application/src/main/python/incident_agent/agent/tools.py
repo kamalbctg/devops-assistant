@@ -18,7 +18,9 @@ from incident_agent.agent.state import normalize_since
 
 class _DataTool(BaseModel):
     service: str = Field(..., description="Service name, must be in scope")
-    since: str = Field(..., description="Start of window, HH:MM")
+    since: str = Field(..., description="Start of window, HH:MM. Narrow it (with until) around a spike to see "
+                                         "the log lines and traces of that moment")
+    until: str | None = Field(None, description="End of window, HH:MM. Default: the end of the incident window")
     hypothesis: str = Field(..., description="Hypothesis id this query tests, e.g. H1")
 
     @field_validator("since")
@@ -27,6 +29,16 @@ class _DataTool(BaseModel):
         hhmm = normalize_since(v)
         if hhmm is None:
             raise ValueError("since must be HH:MM (24h)")
+        return hhmm
+
+    @field_validator("until")
+    @classmethod
+    def _until(cls, v):
+        if not v:
+            return None
+        hhmm = normalize_since(v)
+        if hhmm is None:
+            raise ValueError("until must be HH:MM (24h)")
         return hhmm
 
 
@@ -44,7 +56,10 @@ class logs_search(_DataTool):
     """Search logs (log platform, or pod logs from Kubernetes incl. the previous container after a restart).
     Returns counts, first seen and the top messages."""
 
-    query: str = Field("", description="Text to match, e.g. 'OutOfMemory', or a level like 'error'")
+    query: str = Field("", description="Text to match. All words must appear; 'a OR b' for either; "
+                                        "\"quotes\" for an exact phrase. E.g. 'OutOfMemory', 'phone-numbers OR Exception'")
+    level: Literal["error", "warn"] | None = Field(None, description="Only lines at this level or worse "
+                                                                      "(warn = warnings and errors). Use it to find failures")
 
 
 class traces_search(_DataTool):

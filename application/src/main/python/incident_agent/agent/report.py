@@ -86,6 +86,8 @@ def build_report(state: dict, agent) -> dict:
                 "more specific question (service, error, time) if needed"] if stop.startswith("no progress") else \
                ["Raise the agent's tool-call or turn budget (Edit agent → Limits), then investigate again"] \
                if stop.startswith("budget") else \
+               ["Stopped by the user before a conclusion. Review the evidence below; investigate again to "
+                "continue"] if stop == "stopped by user" else \
                ["Widen the time window or raise the agent's tool-call budget, then investigate again"]
 
     # 5b. Hypotheses table
@@ -132,9 +134,11 @@ def build_report(state: dict, agent) -> dict:
     if v.not_checked:
         limits.append("not checked (no connector): " + ", ".join(CAP.get(x, x) for x in v.not_checked) + " — confidence capped at MEDIUM")
     limits += [f"connector skipped: {s}" for s in agent.skipped]
-    limits += [f"warning: {w}" for w in agent.warnings]
+    # connector setup warnings (writable key, discovery failed) belong to the agent page, not the report
     if (state.get("stop_reason") or "").startswith("budget"):
         limits.append(f"stopped by budget ({state['stop_reason']}) — evidence may be incomplete")
+    if state.get("stop_reason") == "stopped by user":
+        limits.append("stopped by the user — evidence may be incomplete")
     if t.get("skipped"):
         limits.append(f"only {len(t['checked'])} services were swept; not swept: {', '.join(t['skipped'])}")
     excluded = _monitor_excluded_codes(scope.alert)

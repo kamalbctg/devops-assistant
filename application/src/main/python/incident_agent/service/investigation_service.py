@@ -37,6 +37,14 @@ class LimitReached(Exception):
     """The agent already keeps its maximum number of investigations."""
 
 
+class AgentBusy(Exception):
+    """The agent is already investigating: one investigation per agent at a time."""
+
+    def __init__(self, message: str, running_id: str):
+        super().__init__(message)
+        self.running_id = running_id
+
+
 DATA_KEYS = ("events", "interrupt", "report", "verdict", "result", "error", "audit", "prompt_version")
 
 
@@ -59,6 +67,7 @@ class Run:
     audit: list[dict] = field(default_factory=list)
     prompt_version: int | None = None  # saved version of the agent's instructions when the run loaded them
     ctx: AgentContext | None = field(default=None, repr=False)
+    stop_requested: bool = field(default=False, repr=False)
 
     def row(self) -> dict:
         return {"id": self.id, "agent_id": self.agent_id, "agent_name": self.agent_name, "question": self.question,
@@ -165,6 +174,14 @@ class InvestigationService:
         agent.llm_label = "test planner" if self.planner_factory else llm_label(row.get("llm"))
         return AgentContext(agent=agent, gateway=Gateway(agent), planner=planner)
 
+    def running_for(self, agent_id: str) -> dict | None:
+        """The agent's investigation in progress (running or waiting for an answer), if any."""
+        for status in ("running", "waiting_input"):
+            rows = self.store.list_investigations(limit=1, agent_id=agent_id, status=status)
+            if rows:
+                return rows[0]
+        return None
+
     def start(self, question: str, agent_id: str, source: str = "chat", dedup_key: str | None = None) -> dict:
         agent = self.store.get_agent(agent_id)
         if agent is None:
@@ -173,6 +190,10 @@ class InvestigationService:
         run = Run(id=new_id(), agent_id=agent_id, agent_name=agent["name"], question=question,
                   source=source, dedup_key=dedup_key)
         with self._start_lock:  # count + insert together: two starts never both take the last slot
+            busy = self.running_for(agent_id)
+            if busy:
+                raise AgentBusy(f"{agent['name']} is already investigating: {busy['question']}. "
+                                "Wait for it to finish, or stop it.", busy["id"])
             used = self.store.count_investigations(agent_id)
             if used >= limits["max_investigations"]:
                 raise LimitReached(f"{agent['name']} already keeps {used} of {limits['max_investigations']} investigations. "
@@ -195,6 +216,28 @@ class InvestigationService:
         self.pool.submit(self._drive, run, Command(resume=answer))
         return run.row()
 
+    def stop(self, run_id: str) -> dict:
+        """Ask a running investigation to stop: the current step finishes, then verify and the report run
+        on what was found so far. Not instant: a model call or the first checks in progress complete first."""
+        row = self.get(run_id)
+        if row is None:
+            raise KeyError(run_id)
+        if row["status"] not in ("running", "waiting_input"):
+            raise ValueError(f"investigation is {row['status']}, nothing to stop")
+        run = self.active.get(run_id) or Run.from_row(row)
+        if run.stop_requested:
+            return run.row()
+        run.stop_requested = True
+        if run.ctx:
+            run.ctx.stop_requested = True
+        self._step(run, "stop", "stop requested — finishing the current step, then the report")
+        if row["status"] == "waiting_input":  # nothing is running: resume it so it can end with a report
+            run.status, run.interrupt = "running", None
+            self.active[run.id] = run
+            self.store.save_investigation(run.row())
+            self.pool.submit(self._drive, run, Command(resume=""))
+        return run.row()
+
     def delete(self, run_id: str) -> None:
         """Remove the investigation and its graph checkpoints. A running one cannot be deleted."""
         row = self.get(run_id)
@@ -214,6 +257,7 @@ class InvestigationService:
         try:
             if run.ctx is None:
                 run.ctx = self._context(run)
+                run.ctx.stop_requested = run.stop_requested
                 agent = run.ctx.agent
                 text = (f"model: {agent.llm_label}\n"
                         f"connectors: {', '.join(f'{c.type} ({c.mode})' for c in agent.connectors) or 'none'}")
@@ -242,7 +286,7 @@ class InvestigationService:
                     "scope": v.get("scope"), "hypotheses": list((v.get("hypotheses") or {}).values()),
                     "evidence": v.get("evidence", []), "tool_calls_used": v.get("tool_calls_used"),
                     "turns": v.get("turns"), "stop_reason": v.get("stop_reason"), "triage": v.get("triage"), "report": v.get("report_data"),
-                    "analysis": v.get("analysis"),
+                    "analysis": v.get("analysis"), "reasoning": v.get("reasoning", []),
                 })
                 run.status = "done"
         except Exception as e:  # never lose a run silently

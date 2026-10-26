@@ -94,11 +94,24 @@ def system_prompt(instructions: str | None, sources: list[dict] | None = None) -
 INSTRUCTIONS = system_prompt(None)  # default full prompt (kept for reference / tests)
 
 
+def _window_line(scope, tz: str) -> str:
+    """A past incident's window on the clock the evidence uses, so the model can narrow it in HH:MM."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    def hhmm(iso):
+        t = datetime.fromisoformat(iso) if iso else datetime.now(timezone.utc)
+        return t.astimezone(ZoneInfo(tz)).strftime("%H:%M")
+    return (f"WINDOW: {hhmm(scope.since)}–{hhmm(scope.until)} {tz}. Give since/until as HH:MM on this clock; narrow "
+            "them around a spike to see that moment's log lines (queries stay inside this window).")
+
+
 def render_context(view: dict) -> str:
     scope = view["scope"]
     lines = [
         f"INCIDENT: {view['question']}",
         f"SCOPE: service={scope.service} symptom={scope.symptom} since={scope.since}" + (f" until={scope.until}" if scope.until else ""),
+        *([_window_line(scope, view.get("timezone") or "UTC")] if scope.since and "T" in scope.since else []),
         *([f"ALERT: {scope.alert.get('name')} [{scope.alert.get('state')}] monitor {scope.alert.get('monitor_id')} "
            f"query: {scope.alert.get('query', '')[:200]}"] if scope.alert else []),
         *([f"SERVICES: the alert covers {', '.join(view['alert_services'])}; none stood out in the first check. "

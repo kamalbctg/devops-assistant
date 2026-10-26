@@ -10,6 +10,7 @@ Required app key scopes: metrics_read, timeseries_query, monitors_read, logs_rea
 """
 
 import re
+import time
 
 from .base import ConnectorError, downsample
 from .http import HttpConnector
@@ -35,6 +36,15 @@ def monitor_metric(query: str) -> dict | None:
     """`sum(last_2m):<metric expression> >= 1` -> {"expr", "op", "threshold"}; None for other monitor kinds."""
     m = MONITOR_QUERY.match(query or "")
     return {"expr": m["expr"], "op": m["op"], "threshold": float(m["threshold"])} if m else None
+
+# APM names that differ from the Kubernetes container name, learned from the spans themselves
+# ({(site, key): (expires_at, {container: apm_service})}); shared by the connectors of every run
+_ALIASES: dict[tuple, tuple[float, dict[str, str]]] = {}
+ALIAS_TTL, ALIAS_RETRY = 6 * 3600, 600
+
+LOG_STATUS = {"error": "status:(error OR critical OR emergency OR alert)",
+              "warn": "status:(warn OR error OR critical OR emergency OR alert)"}
+
 
 class Datadog(HttpConnector):
     type = "datadog"
@@ -103,7 +113,8 @@ match the IDs printed inside application logs."""
     def _filter(self, args, extra=""):
         start, end = self.window(args)
         env = f" env:{args['env']}" if args.get("env") else ""  # the alert's environment, e.g. production
-        q = f"{self._tag()}:{args['service']}{env}" + (f" ({extra})" if extra else "")  # () keeps OR inside
+        svc = f"({args['service']} OR {args['also']})" if args.get("also") else args["service"]
+        q = f"{self._tag()}:{svc}{env}" + (f" ({extra})" if extra else "")  # () keeps OR inside
         return {"query": q, "from": start.isoformat(), "to": end.isoformat()}
 
     def _metric_query(self, args):
@@ -113,7 +124,9 @@ match the IDs printed inside application logs."""
         return tmpl.format(tag=self._tag(), s=args["service"] + (f",env:{args['env']}" if args.get("env") else ""))
 
     def native_query(self, capability, args):
-        s = args["service"]
+        if self.mode != "fake":
+            args = self._as_apm(args)
+        s = f"({args['service']} OR {args['also']})" if args.get("also") and capability != "metrics.query" else args["service"]
         if capability == "alerts.list":
             return f"GET /api/v1/monitor?monitor_tags={self._tag()}:{s}&group_states=alert,warn"
         if capability == "metrics.query":
@@ -121,7 +134,7 @@ match the IDs printed inside application logs."""
         if capability == "traces.search":
             return (f"POST /api/v2/spans/analytics/aggregate filter={self._tag()}:{s} compute=pc99(@duration),count"
                     f" group_by=resource_name from={args['since']}")
-        q = args.get("query", "")
+        q = " ".join(x for x in (args.get("query", ""), LOG_STATUS.get(args.get("level"), "")) if x)
         return f"POST /api/v2/logs/analytics/aggregate filter={self._tag()}:{s} {q} from={args['since']} group_by={self.settings.get('logs_group_by', '@error.message')}"
 
     def monitor(self, monitor_id: str) -> dict:
@@ -154,9 +167,9 @@ match the IDs printed inside application logs."""
         """The service tag, else every `service:x` filter in the query (not `!service:x`, which excludes)."""
         tag = self._tag()
         tags = dict(t.split(":", 1) for t in m.get("tags", []) if ":" in t)
-        if tags.get(tag):
-            return [tags[tag]]
-        return re.findall(rf"(?<![!\w.-]){re.escape(tag)}:([A-Za-z0-9_.\-]+)", m.get("query", ""))
+        found = [tags[tag]] if tags.get(tag) else \
+            re.findall(rf"(?<![!\w.-]){re.escape(tag)}:([A-Za-z0-9_.\-]+)", m.get("query", ""))
+        return [self.common_name(x) for x in found]
 
     def discover_services(self):
         self.secret("app_key")
@@ -164,21 +177,78 @@ match the IDs printed inside application logs."""
         tag = self._tag()
         r = self.post("/api/v2/logs/analytics/aggregate", {
             "compute": [{"aggregation": "count"}], "filter": {"query": "*", "from": "now-24h", "to": "now"},
-            "group_by": [{"facet": tag, "limit": 200, "sort": {"aggregation": "count", "order": "desc"}}]}).json()
+            "group_by": [{"facet": tag, "limit": 200, "sort": {"type": "measure", "aggregation": "count", "order": "desc"}}]}).json()
         names |= {str(b["by"].get(tag)) for b in r.get("data", {}).get("buckets", []) if b["by"].get(tag)}
+        now = int(time.time())  # v1 query takes epoch seconds, not "now-24h"
         series = self.get("/api/v1/query", query=f"sum:trace.http.request.hits{{*}} by {{{tag}}}.as_count()",
-                          **{"from": "now-24h", "to": "now"}).json().get("series", [])
+                          **{"from": now - 86400, "to": now}).json().get("series", [])
         names |= {sc.split(":", 1)[1] for s in series for sc in s.get("scope", "").split(",") if sc.startswith(tag + ":")}
-        return [n for n in names if n not in ("N/A", "None")]
+        return list({self.common_name(n) for n in names if n not in ("N/A", "None")})
+
+    # ---- service names: one name everywhere, the APM name only on the way to Datadog ----
+
+    def aliases(self) -> dict[str, str]:
+        """{container name: APM service name} where they differ, e.g. agent-call-cmd-service -> call-cmd-service.
+
+        Read from 24 h of server spans (client spans such as mongo or redis are left out), cached for a few
+        hours. A container whose own name is also an APM service needs no alias. Never fails a query."""
+        if self.mode == "fake":
+            return {}
+        key = (self.settings.get("site"), self.secret("api_key"))
+        hit = _ALIASES.get(key)
+        if hit and hit[0] > time.time():
+            return hit[1]
+        try:
+            self.secret("app_key")
+            count = {"aggregation": "count", "order": "desc", "type": "measure"}
+            r = self.post("/api/v2/spans/analytics/aggregate", {"data": {"type": "aggregate_request", "attributes": {
+                "compute": [{"aggregation": "count"}],
+                "filter": {"query": "-@span.kind:client", "from": "now-24h", "to": "now"},
+                # Datadog allows at most 10 000 groups in all: 500 services x 5 containers each
+                "group_by": [{"facet": "service", "limit": 500, "sort": count},
+                             {"facet": "kube_container_name", "limit": 5, "sort": count}]}}})
+            rows = [b.get("attributes", {}) for b in r.json().get("data", [])]
+            pairs = [(str(r["by"].get("service")), str(r["by"].get("kube_container_name")), int(r["compute"]["c0"]))
+                     for r in rows if r.get("by", {}).get("service") and r["by"].get("kube_container_name")]
+        except Exception:  # noqa: BLE001 — without aliases queries still run under the name given
+            _ALIASES[key] = (time.time() + ALIAS_RETRY, {})
+            return {}
+        services = {svc for svc, _, _ in pairs}
+        best: dict[str, tuple[str, int]] = {}
+        for svc, container, n in pairs:
+            if container not in services and svc != container and n > best.get(container, ("", -1))[1]:
+                best[container] = (svc, n)
+        found = {c: svc for c, (svc, _) in best.items()}
+        _ALIASES[key] = (time.time() + ALIAS_TTL, found)
+        return found
+
+    def apm_name(self, service: str) -> str:
+        return self.aliases().get(service, service)
+
+    def common_name(self, apm_service: str) -> str:
+        """The other way: an APM name (from a monitor or a trace) as the name the other sources use."""
+        back = {}
+        for container, svc in self.aliases().items():
+            back.setdefault(svc, []).append(container)
+        return back[apm_service][0] if len(back.get(apm_service, [])) == 1 else apm_service
+
+    def _as_apm(self, args: dict) -> dict:
+        """args with the APM name; the original kept so logs (tagged with the container name) match either."""
+        apm = self.apm_name(args["service"])
+        return {**args, "service": apm, **({"also": args["service"]} if apm != args["service"] else {})}
 
     def fetch(self, capability, args):
         self.secret("app_key")  # every read endpoint needs it
+        args = self._as_apm(args)
         return {"alerts.list": self._alerts, "metrics.query": self._metrics,
                 "traces.search": self._traces, "logs.search": self._logs}[capability](args)
 
     def _alerts(self, args):
-        monitors = self.get("/api/v1/monitor", monitor_tags=f"{self._tag()}:{args['service']}",
-                            group_states="alert,warn").json()
+        monitors = {}  # monitors may be tagged with either name
+        for name in filter(None, (args["service"], args.get("also"))):
+            for m in self.get("/api/v1/monitor", monitor_tags=f"{self._tag()}:{name}", group_states="alert,warn").json():
+                monitors.setdefault(m.get("id"), m)
+        monitors = list(monitors.values())
         return {"alerts": [{"name": m["name"], "status": m.get("overall_state", "?"),
                             "since": self.hhmm(m.get("overall_state_modified")) or "?"}
                            for m in monitors if m.get("overall_state") in ("Alert", "Warn", "No Data")]}
@@ -196,6 +266,8 @@ match the IDs printed inside application logs."""
 
     def _logs(self, args):
         f = self._filter(args, args.get("query", ""))
+        if args.get("level"):
+            f["query"] += " " + LOG_STATUS[args["level"]]
         count = self.post("/api/v2/logs/analytics/aggregate",
                           {"compute": [{"aggregation": "count"}], "filter": f}).json()
         buckets = count.get("data", {}).get("buckets", [])
@@ -248,12 +320,13 @@ match the IDs printed inside application logs."""
             traces = list(dict.fromkeys(s.get("attributes", {}).get("trace_id") for s in found))[:samples]
             down: dict[str, int] = {}
             for tid in filter(None, traces):
-                spans = self._spans({"query": f"trace_id:{tid} -{self._tag()}:{args['service']} status:error",
+                me = f"({args['service']} OR {args['also']})" if args.get("also") else args["service"]
+                spans = self._spans({"query": f"trace_id:{tid} -{self._tag()}:{me} status:error",
                                      "from": f["from"], "to": f["to"]},
                                     group_by=f"{self._tag()}", compute=[{"aggregation": "count"}], limit=5,
                                     sort={"aggregation": "count", "order": "desc", "type": "measure"})
                 for b in spans:
-                    name = str(b["by"].get(self._tag()))
+                    name = self.common_name(str(b["by"].get(self._tag())))
                     down[name] = down.get(name, 0) + int(b["compute"]["c0"])
             return {"downstream_5xx": down, "traces_checked": len([t for t in traces if t])}
         except ConnectorError:

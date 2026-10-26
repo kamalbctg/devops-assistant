@@ -11,7 +11,9 @@ LANGGRAPH CONCEPT — State
 
 import operator
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal, TypedDict
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -27,6 +29,30 @@ def normalize_since(value: str | None) -> str | None:
         return value
     m = _HHMM.search(value)
     return f"{int(m.group(1)):02d}:{m.group(2)}" if m else None
+
+
+def clamp_window(since_iso: str, until_iso: str | None, since: str | None, until: str | None, tz: str) -> dict:
+    """A past incident's window, narrowed to what the model asked for and never wider.
+
+    since_iso/until_iso: the alert's window (timestamps). since/until: the model's HH:MM in the agent's
+    timezone (the same clock the evidence summaries use), or timestamps. Returns ISO since and until.
+    """
+    lo = datetime.fromisoformat(since_iso)
+    hi = datetime.fromisoformat(until_iso) if until_iso else datetime.now(timezone.utc)
+
+    def at(value, default):
+        if not value:
+            return default
+        if "T" in value:
+            return datetime.fromisoformat(value)
+        h, m = map(int, value.split(":"))
+        t = lo.astimezone(ZoneInfo(tz)).replace(hour=h, minute=m, second=0, microsecond=0)
+        return t + timedelta(days=1) if t < lo - timedelta(hours=12) else t  # window across midnight
+
+    s, u = min(max(at(since, lo), lo), hi), min(max(at(until, hi), lo), hi)
+    if u <= s:  # empty or reversed: the whole window
+        s, u = lo, hi
+    return {"since": s.isoformat(), "until": u.isoformat()}
 
 
 class Scope(BaseModel):
@@ -110,6 +136,7 @@ class InvestigationState(TypedDict, total=False):
     conclusion: Conclusion | None
     stop_reason: str | None
     stale_turns: int  # turns in a row without new evidence; the loop stops at MAX_STALE_TURNS
+    reasoning: Annotated[list[dict], operator.add]  # per turn: {"turn", "model", "text"}; kept, never sent back
     # end
     verdict: Verdict
     analysis: list[dict] | None  # post-investigation analysis fields (model-extracted, type-checked)

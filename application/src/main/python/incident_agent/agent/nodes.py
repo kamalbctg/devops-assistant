@@ -28,8 +28,9 @@ from incident_agent.agent.state import (
     InvestigationState,
     Scope,
     Verdict,
+    clamp_window,
 )
-from incident_agent.agent.summarize import crossed, metric_trend, summarize
+from incident_agent.agent.summarize import crossed, metric_trend, redact, summarize
 from incident_agent.agent.tools import (
     BOARD_TOOLS,
     DATA_TOOLS,
@@ -44,6 +45,8 @@ KEEP_DATA = {"k8s.pods", "traces.search"}  # small structured results (no log li
 MAX_TRIAGE_SERVICES = 10  # services swept for alerts/metrics when the question names none
 MAX_K8S_TRIAGE_SERVICES = 100  # pod health is one cached list per namespace, so sweep more
 MAX_STALE_TURNS = 2  # stop after this many turns in a row that added nothing (only repeated queries)
+MAX_REASONING_CHARS = 2000  # stored model reasoning per turn
+STOPPED_BY_USER = "stopped by user"
 
 
 @dataclass
@@ -51,7 +54,7 @@ class AgentContext:
     agent: AgentConfig
     gateway: Gateway
     planner: Planner
-
+    stop_requested: bool = False  # set by the user's Stop: the loop ends at the next turn and the report is written
 
 def _minus_minutes(hhmm: str, minutes: int) -> str:
     if "T" in hhmm:  # ISO timestamp
@@ -306,10 +309,18 @@ def triage(state: InvestigationState, runtime: Runtime[AgentContext]) -> dict:
 
 # ---------------------------------------------------------------- 2. ReAct loop
 
+def _clip_text(s: str, n: int) -> str:
+    s = s.strip()
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
 def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> dict:
     """One ReAct turn: the planner looks at the board and picks actions; we execute them."""
     ctx = runtime.context
     budget = ctx.agent.budget
+    if ctx.stop_requested:  # no model call: go straight to verify and the report with what is known
+        return {"hypotheses": state["hypotheses"], "evidence": [], "tool_calls_used": state["tool_calls_used"],
+                "turns": state["turns"], "notes": [], "stop_reason": STOPPED_BY_USER}
     hyps = {k: v.model_copy(deep=True) for k, v in state["hypotheses"].items()}
     evidence = list(state["evidence"])
     used = state["tool_calls_used"]
@@ -319,6 +330,7 @@ def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> di
         "not_configured": ctx.agent.not_configured,
         "calls_left": budget.max_tool_calls - used, "turns_left": budget.max_turns - state["turns"],
         "instructions": ctx.agent.prompt,
+        "timezone": ctx.agent.timezone,
         "alert_services": [] if state["scope"].service else (state.get("triage") or {}).get("checked", []),
         "services": ctx.agent.known_services(),
         "sources": [{"name": c.name, "type": c.type, "provides": c.provides, "notes": c.notes}
@@ -327,6 +339,9 @@ def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> di
 
     tool_classes = {t.__name__: t for t in view["tools"]}
     actions = ctx.planner.next_actions(view)  # THINK
+    why = ""
+    if isinstance(actions, dict):  # the planner also said why
+        actions, why = actions["actions"], actions.get("reasoning") or ""
     notes: list[str] = []
     new_evidence: list[Evidence] = []
     conclusion = None
@@ -335,19 +350,25 @@ def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> di
         notes.append("You did not call any tool. Call a data tool or finish.")
 
     for action in actions:  # ACT
+        if ctx.stop_requested:  # stopped while the model was thinking: run none of its queries
+            break
         name, args = action["name"], action["args"]
         try:
             if name in TOOL_TO_CAPABILITY:
                 scope = state["scope"]
-                if scope.since and "T" in scope.since:  # past incident: keep the model inside the alert's window
-                    args = {**args, "since": scope.since}
                 params = tool_classes.get(name, DATA_TOOLS[TOOL_TO_CAPABILITY[name]]).model_validate(args)  # validate first
                 if data_calls >= MAX_DATA_CALLS_PER_TURN or used >= budget.max_tool_calls:
                     notes.append(f"Skipped {name}: per-turn or total budget reached.")
                     continue
                 env = (scope.alert or {}).get("env")
-                run_args = {**params.model_dump(), **({"until": scope.until} if scope.until else {}),
-                            **({"env": env} if env else {})}
+                run_args = {k: v for k, v in params.model_dump().items() if k != "until"}
+                if scope.since and "T" in scope.since:  # past incident: the model may narrow the window, never leave it
+                    run_args.update(clamp_window(scope.since, scope.until, params.since, params.until,
+                                                 ctx.agent.timezone))
+                elif scope.until:
+                    run_args["until"] = scope.until
+                if env:
+                    run_args["env"] = env
                 query_args = {k: v for k, v in run_args.items() if k != "hypothesis"}  # as _run stores them
                 repeat = next((e for e in evidence + new_evidence
                                if e.capability == TOOL_TO_CAPABILITY[name] and e.args == query_args), None)
@@ -414,6 +435,8 @@ def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> di
     stop_reason = None
     if conclusion:
         stop_reason = "finished"
+    elif ctx.stop_requested:
+        stop_reason = STOPPED_BY_USER
     elif stale >= MAX_STALE_TURNS:
         stop_reason = f"no progress: {stale} turns without new evidence"
     elif used >= budget.max_tool_calls:
@@ -421,8 +444,12 @@ def investigate(state: InvestigationState, runtime: Runtime[AgentContext]) -> di
     elif turns >= budget.max_turns:
         stop_reason = "budget: turns"
 
+    # stored with the investigation (masked, cut short); not part of the next turn's prompt
+    reasoning = [{"turn": turns, "model": getattr(ctx.planner, "model", None),
+                  "text": _clip_text(redact(why), MAX_REASONING_CHARS)}] if why.strip() else []
     return {"hypotheses": hyps, "evidence": new_evidence, "tool_calls_used": used, "turns": turns,
-            "notes": notes, "conclusion": conclusion, "stop_reason": stop_reason, "stale_turns": stale}
+            "notes": notes, "conclusion": conclusion, "stop_reason": stop_reason, "stale_turns": stale,
+            "reasoning": reasoning}
 
 
 # ---------------------------------------------------------------- 3. fixed end

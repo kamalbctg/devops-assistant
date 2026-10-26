@@ -104,6 +104,52 @@ def test_missing_connector_lowers_confidence():
     assert any("not checked (no connector): logs" in x for x in result["report_data"]["confidence_detail"]["limitations"])
 
 
+def test_model_reasoning_is_stored_per_turn_and_masked():
+    class Explains(ScriptedPlanner):
+        model = "claude-test"
+
+        def next_actions(self, view):
+            why = f"turn {len(view['evidence'])}: client 10.1.2.3 saw timeouts, checking memory first"
+            return {"actions": super().next_actions(view), "reasoning": why + " " + "x" * 3000}
+
+    result, _ = run("Checkout is slow since 10:04", make_agent(), planner=Explains())
+    reasoning = result["reasoning"]
+    assert [r["turn"] for r in reasoning] == list(range(1, result["turns"] + 1))
+    first = reasoning[0]
+    assert first["model"] == "claude-test" and "[ip]" in first["text"] and "10.1.2.3" not in first["text"]
+    assert len(first["text"]) == 2000 and first["text"].endswith("…")
+    assert result["verdict"].status == "root_cause_found"  # actions still run as before
+
+
+def test_stop_requested_skips_the_model_and_writes_report():
+    class NoModel(ScriptedPlanner):
+        def next_actions(self, view):
+            raise AssertionError("the model must not be called after Stop")
+
+    agent = make_agent()
+    ctx = AgentContext(agent=agent, gateway=Gateway(agent), planner=NoModel(), stop_requested=True)
+    result = build_graph().invoke({"question": "Checkout is slow since 10:04"},
+                                  {"configurable": {"thread_id": str(uuid.uuid4())}}, context=ctx)
+    assert result["stop_reason"] == "stopped by user"
+    assert result["verdict"].status == "inconclusive"
+    assert "stopped by the user" in result["report"]
+
+
+def test_planner_without_reasoning_stores_none():
+    result, _ = run("Checkout is slow since 10:04", make_agent())
+    assert result.get("reasoning", []) == []
+
+
+def test_reasoning_text_keeps_thinking_and_text_blocks():
+    from incident_agent.agent.planner import reasoning_text
+
+    content = [{"type": "thinking", "thinking": "Pool exhausted?", "signature": "s"},
+               {"type": "text", "text": "Checking traces."},
+               {"type": "tool_use", "id": "t1", "name": "traces_search", "input": {}}]
+    assert reasoning_text(content) == "Pool exhausted?\n\nChecking traces."
+    assert reasoning_text("") == ""
+
+
 def test_finish_with_one_signal_is_rejected():
     class Hasty(ScriptedPlanner):
         def next_actions(self, view):
@@ -225,6 +271,43 @@ def _link():
     at = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp() * 1000)  # an alert 2 h ago
     return (f"https://app.datadoghq.com/monitors/264260680?group=env%3Aproduction&from_ts={at - 1200000}"
             f"&to_ts={at}&event_id=1&link_source=monitor_notif&link_monitor_id=264260680&link_event_ts={at}")
+
+
+def test_past_incident_window_can_be_narrowed_never_widened():
+    from incident_agent.agent.state import clamp_window
+    lo, hi = "2026-10-26T06:01:40+00:00", "2026-10-26T07:16:40+00:00"
+    # the model zooms in on the spike
+    assert clamp_window(lo, hi, "06:44", "06:48", "UTC") == {"since": "2026-10-26T06:44:00+00:00",
+                                                            "until": "2026-10-26T06:48:00+00:00"}
+    # no time given, or outside the window: the alert's window
+    assert clamp_window(lo, hi, None, None, "UTC") == {"since": lo, "until": hi}
+    assert clamp_window(lo, hi, "05:00", "09:00", "UTC") == {"since": lo, "until": hi}
+    # reversed: the whole window
+    assert clamp_window(lo, hi, "06:50", "06:40", "UTC") == {"since": lo, "until": hi}
+    # HH:MM is on the agent's clock (Dhaka = UTC+6): 12:45 there is 06:45 UTC
+    w = clamp_window(lo, hi, "12:45", None, "Asia/Dhaka")
+    assert w["since"] == "2026-10-26T12:45:00+06:00" and w["until"] == hi
+    # a window across midnight: 00:10 is the next day
+    w = clamp_window("2026-10-26T23:50:00+00:00", "2026-10-27T00:30:00+00:00", "00:10", None, "UTC")
+    assert w["since"] == "2026-10-27T00:10:00+00:00"
+
+
+def test_model_window_reaches_the_connector_for_a_past_incident():
+    from incident_agent.agent.prompts import render_context
+    from incident_agent.agent.tools import logs_search
+
+    p = logs_search.model_validate({"service": "gw", "since": "6:44", "until": "06:48", "hypothesis": "H1"})
+    assert (p.since, p.until) == ("06:44", "06:48")
+    assert logs_search.model_validate({"service": "gw", "since": "06:44", "hypothesis": "H1"}).until is None
+    with pytest.raises(Exception):
+        logs_search.model_validate({"service": "gw", "since": "06:44", "until": "soon", "hypothesis": "H1"})
+
+    from incident_agent.agent.state import Scope
+    scope = Scope(service="gw", symptom="errors", since="2026-10-26T06:01:40+00:00", until="2026-10-26T07:16:40+00:00")
+    text = render_context({"question": "q", "scope": scope, "hypotheses": {}, "evidence": [], "notes": [],
+                           "tools": [], "not_configured": [], "calls_left": 5, "turns_left": 3,
+                           "timezone": "Asia/Dhaka"})
+    assert "WINDOW: 12:01–13:16 Asia/Dhaka" in text
 
 
 def test_link_times_in_seconds_or_milliseconds():
@@ -421,6 +504,29 @@ def test_repeat_query_is_skipped_for_past_incident_window():
     assert result["scope"].until
     assert sum(e.capability == "logs.search" and e.id.startswith("E") for e in result["evidence"]) == 1
     assert result["tool_calls_used"] == 1  # the second, identical query was skipped
+
+
+def test_narrowed_window_reaches_the_connector():
+    from datetime import datetime, timedelta
+
+    class ZoomPlanner(ScriptedPlanner):
+        def next_actions(self, view):
+            lo = datetime.fromisoformat(view["scope"].since)
+            self.want = (lo + timedelta(minutes=5)).replace(second=0), (lo + timedelta(minutes=9)).replace(second=0)
+            if view["evidence"] and any(e.id.startswith("E") for e in view["evidence"]):
+                ids = [e.id for e in view["evidence"]]
+                return [{"name": "finish", "args": {"kind": "answer", "summary": "x", "evidence_ids": ids,
+                                                    "confidence": "LOW"}}]
+            return [{"name": "logs_search", "args": {"service": "checkout", "hypothesis": "H1", "query": "Exception",
+                                                     "since": self.want[0].strftime("%H:%M"),
+                                                     "until": self.want[1].strftime("%H:%M")}}]
+
+    agent = make_agent()  # timezone UTC: the HH:MM above is on the agent's clock
+    next(c for c in agent.connectors if c.type == "datadog").monitor = lambda mid: {"service": "checkout"}
+    planner = ZoomPlanner()
+    result, _ = run(_link(), agent, planner=planner)
+    e = next(e for e in result["evidence"] if e.id.startswith("E"))
+    assert (e.args["since"], e.args["until"]) == tuple(t.isoformat() for t in planner.want)
 
 
 def test_since_is_normalized_or_rejected():

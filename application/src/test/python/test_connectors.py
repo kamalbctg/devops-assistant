@@ -85,6 +85,60 @@ def test_datadog_logs(dd_keys):
     dd.transport = httpx.MockTransport(handler)
     data = dd.query("logs.search", {**ARGS, "query": "OutOfMemory"}).data
     assert data["total"] == 390 and data["top"] == [["OOM", 388]] and data["first_seen"]
+    sent = []
+    dd.transport = httpx.MockTransport(lambda req: sent.append(json.loads(req.content)) or handler(req))
+    dd.query("logs.search", {**ARGS, "query": "OutOfMemory", "level": "error"})
+    assert sent[0]["filter"]["query"].endswith("(OutOfMemory) status:(error OR critical OR emergency OR alert)")
+
+
+def test_datadog_learns_apm_names_and_swaps_them(dd_keys, monkeypatch):
+    from conftest import LEARN_ALIASES
+    monkeypatch.setattr(Datadog, "aliases", LEARN_ALIASES)
+    pairs = [("call-cmd-service", "agent-call-cmd-service", 53354),
+             ("mongo", "agent-call-cmd-service", 22825),       # a client span inside the container: not the name
+             ("checkout", "checkout", 900),                     # same name: no alias
+             ("mongo", "checkout", 10)]
+    sent = []
+
+    def handler(req):
+        body = json.loads(req.content) if req.content else {}
+        sent.append((req.url.path, body, dict(req.url.params)))
+        attrs = body.get("data", {}).get("attributes", {})
+        if attrs.get("filter", {}).get("query") == "-@span.kind:client":  # the alias lookup
+            return httpx.Response(200, json={"data": [{"attributes": {"by": {"service": a, "kube_container_name": c},
+                                                                      "compute": {"c0": n}}} for a, c, n in pairs]})
+        if req.url.path.endswith("/monitor"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(200, json={"data": []})
+
+    dd = Datadog(["traces.search", "alerts.list"], dd_keys)
+    dd.transport = httpx.MockTransport(handler)
+    assert dd.aliases() == {"agent-call-cmd-service": "call-cmd-service"}
+    assert dd.apm_name("checkout") == "checkout" and dd.common_name("call-cmd-service") == "agent-call-cmd-service"
+
+    args = {**ARGS, "service": "agent-call-cmd-service"}
+    assert "service:(call-cmd-service OR agent-call-cmd-service)" in dd.native_query("traces.search", args)
+    sent.clear()
+    dd.query("traces.search", args)
+    queries = [b["data"]["attributes"]["filter"]["query"] for path, b, _ in sent if "spans" in path]
+    assert queries and all(q.startswith("service:(call-cmd-service OR agent-call-cmd-service)") for q in queries)
+    dd.query("alerts.list", args)  # monitors tagged with either name
+    assert {p["monitor_tags"] for path, _, p in sent if path.endswith("/monitor")} == \
+        {"service:call-cmd-service", "service:agent-call-cmd-service"}
+    # a monitor on the APM name becomes the common name, so logs and pods are searched under it
+    assert dd._monitor_services({"tags": [], "query": "sum:trace.hits{service:call-cmd-service} > 1"}) == \
+        ["agent-call-cmd-service"]
+    lookups = sum(1 for _, b, _ in sent if b.get("data", {}).get("attributes", {}).get("filter", {}).get("query")
+                  == "-@span.kind:client")
+    assert lookups == 0  # learned once, then cached
+
+
+def test_datadog_alias_lookup_failure_keeps_the_name(dd_keys, monkeypatch):
+    from conftest import LEARN_ALIASES
+    monkeypatch.setattr(Datadog, "aliases", LEARN_ALIASES)
+    dd = Datadog(["traces.search"], dd_keys)
+    dd.transport = httpx.MockTransport(lambda req: httpx.Response(403, json={"errors": ["no apm_read"]}))
+    assert dd.aliases() == {} and dd.apm_name("agent-call-cmd-service") == "agent-call-cmd-service"
 
 
 def test_missing_secret_is_a_clear_error():
@@ -156,8 +210,35 @@ def test_elasticsearch():
     data = es.query("logs.search", {**ARGS, "query": "OutOfMemory"}).data
     assert data["total"] == 388 and data["top"][0][1] == 388
     q = es.client.calls[0]["query"]["bool"]["filter"]
-    assert {"match_phrase": {"service.name": "checkout"}} in q and {"match": {"message": "OutOfMemory"}} in q
+    assert {"match_phrase": {"service.name": "checkout"}} in q
+    assert {"simple_query_string": {"query": "OutOfMemory", "fields": ["message"], "default_operator": "and"}} in q
     assert "388 hits" in summarize("logs.search", data, ARGS)
+
+
+def test_elasticsearch_query_syntax_and_level():
+    from incident_agent.connectors.elasticsearch import es_query
+    # all words must match by default; OR / AND / NOT become simple_query_string operators
+    assert es_query("Internal Server Error") == "Internal Server Error"
+    assert es_query("phone-numbers OR Exception OR 500") == "phone-numbers | Exception | 500"
+    assert es_query("timeout AND db") == "timeout + db"
+    assert es_query('NOT health "connection reset"') == '-health "connection reset"'
+
+    # level from the text: a level word or exception required, quieter lines left out
+    es = Elasticsearch(["logs.search"], {"indices": ["k8s-*"], "message_field": "log"})
+    body = es.body({**ARGS, "query": "phone", "level": "error"})["query"]["bool"]
+    assert {"simple_query_string": {"query": "ERROR | FATAL | CRITICAL | SEVERE | Exception", "fields": ["log"]}} \
+        in body["filter"]
+    assert [m["match_phrase"]["log"] for m in body["must_not"]] == ["DEBUG", "TRACE", "INFO", "WARN"]
+    warn = es.body({**ARGS, "level": "warn"})["query"]["bool"]
+    assert "WARN" not in [m["match_phrase"]["log"] for m in warn["must_not"]]
+
+    # a level field: exact filter, no guessing from the text
+    es = Elasticsearch(["logs.search"], {"indices": ["k8s-*"], "message_field": "log", "level_field": "level"})
+    body = es.body({**ARGS, "level": "error"})["query"]["bool"]
+    assert {"terms": {"level": ["ERROR", "FATAL", "CRITICAL", "SEVERE", "error", "fatal", "critical", "severe"]}} \
+        in body["filter"]
+    assert [m["match_phrase"]["log"] for m in body["must_not"]] == ["DEBUG", "TRACE"]
+    assert es.body(ARGS)["query"]["bool"]["filter"][2:] == []  # no query, no level: service + window only
 
 
 def test_elasticsearch_rejects_wide_or_writable_scope():
@@ -330,6 +411,8 @@ def test_kubernetes_pods_and_logs():
     found = k.query("logs.search", {**args, "query": "outofmemory OR timeout"}).data
     assert found["total"] == 2 and found["top"][0][1] == 1 and found["pods_read"] == 2
     assert any("[previous container]" in m for m, _ in found["top"])
+    errors = k.query("logs.search", {**args, "level": "error"}).data  # INFO lines left out
+    assert errors["total"] == 2 and all("ERROR" in m for m, _ in errors["top"])
 
 
 def test_kubernetes_refuses_write_access_and_foreign_namespace():

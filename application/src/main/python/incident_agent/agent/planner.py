@@ -19,8 +19,18 @@ from incident_agent.agent.tools import anthropic_spec
 
 class Planner(Protocol):
     def intake(self, question: str, services: list[str]) -> Scope: ...
-    def next_actions(self, view: dict) -> list[dict]: ...  # [{"name": ..., "args": {...}}]
+    # [{"name": ..., "args": {...}}], or {"actions": [...], "reasoning": "why"} when the planner can say why
+    def next_actions(self, view: dict) -> list[dict] | dict: ...
     def analyze(self, fields: list[dict], transcript: str) -> dict: ...  # {field: {"value", "evidence_ids"}}
+
+
+def reasoning_text(content) -> str:
+    """The model's summarized thinking plus any text it wrote before its tool calls."""
+    if isinstance(content, str):
+        return content.strip()
+    parts = [b.get("thinking") or b.get("text") or "" for b in content
+             if isinstance(b, dict) and b.get("type") in ("thinking", "text")]
+    return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
 class ClaudePlanner:
@@ -35,7 +45,9 @@ class ClaudePlanner:
             key["default_headers"] = headers
         self.model = strong
         self.fast = ChatAnthropic(model=fast, max_tokens=4096, effort="low", **key)
-        self.strong = ChatAnthropic(model=strong, max_tokens=16000, **({"effort": effort} if effort else {}), **key)
+        # "summarized": the response carries a readable summary of the thinking, stored per turn
+        self.strong = ChatAnthropic(model=strong, max_tokens=16000, thinking={"type": "adaptive", "display": "summarized"},
+                                    **({"effort": effort} if effort else {}), **key)
 
     def intake(self, question, services):
         extractor = self.fast.with_structured_output(Scope, method="json_schema")
@@ -54,7 +66,8 @@ class ClaudePlanner:
                     HumanMessage(render_context(view))]
         response = model.invoke(messages)
         # LangChain normalizes Claude's tool_use blocks into response.tool_calls
-        return [{"name": c["name"], "args": c["args"]} for c in response.tool_calls]
+        return {"actions": [{"name": c["name"], "args": c["args"]} for c in response.tool_calls],
+                "reasoning": reasoning_text(response.content)}
 
     def analyze(self, fields, transcript):
         from incident_agent.agent.analysis import output_model

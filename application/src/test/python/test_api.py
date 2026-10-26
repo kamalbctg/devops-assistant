@@ -134,6 +134,63 @@ def test_agent_without_k8s_reports_gap(client):
 
 # ---------------------------------------------------------------- investigations
 
+def test_stop_ends_run_with_report(env, demo_agent):
+    import threading
+
+    store, box, _ = env
+    thinking, release = threading.Event(), threading.Event()
+
+    class Slow(ScriptedPlanner):
+        def next_actions(self, view):  # holds the first turn "mid model call" until the test has pressed Stop
+            thinking.set()
+            release.wait(5)
+            return super().next_actions(view)
+
+    client = TestClient(create_app(store, box, InvestigationService(store, box, Slow)))
+    run_id = client.post("/investigations", json={"question": "Checkout is slow since 10:04",
+                                                  "agent_id": demo_agent["id"]}).json()["id"]
+    assert thinking.wait(5)
+    assert client.post(f"/investigations/{run_id}/stop").status_code == 200
+    release.set()
+    run = wait(client, run_id)
+    assert run["status"] == "done" and run["result"]["stop_reason"] == "stopped by user"
+    assert run["result"]["tool_calls_used"] == 0  # the model's first actions were not run
+    assert run["verdict"]["status"] == "inconclusive" and run["report"]
+    assert "stop" in [e["node"] for e in run["events"]]
+    assert client.post(f"/investigations/{run_id}/stop").status_code == 409  # finished: nothing to stop
+    assert client.post("/investigations/nope/stop").status_code == 404
+
+
+def test_one_investigation_per_agent_at_a_time(env, demo_agent):
+    import threading
+
+    store, box, _ = env
+    thinking, release = threading.Event(), threading.Event()
+
+    class Slow(ScriptedPlanner):
+        def next_actions(self, view):
+            thinking.set()
+            release.wait(5)
+            return super().next_actions(view)
+
+    client = TestClient(create_app(store, box, InvestigationService(store, box, Slow)))
+    q = {"question": "Checkout is slow since 10:04", "agent_id": demo_agent["id"]}
+    first = client.post("/investigations", json=q).json()["id"]
+    assert thinking.wait(5)
+
+    busy = client.post("/investigations", json=q)
+    assert busy.status_code == 409 and busy.json()["detail"]["running_id"] == first
+    alert = {"id": "9", "title": "checkout errors", "transition": "Triggered",
+             "tags": "service:checkout", "date": str(ten_oh_four_ms())}
+    r = client.post("/webhooks/datadog", json=alert, headers={"X-Webhook-Token": "s3cret"}).json()
+    assert r["status"] == "skipped" and r["investigation"] == first
+    assert [x["id"] for x in client.get("/investigations").json()] == [first]  # nothing else was started
+
+    release.set()
+    assert wait(client, first)["status"] == "done"
+    assert client.post("/investigations", json=q).status_code == 201  # free again
+
+
 def test_investigation_uses_agent_connectors(client, demo_agent):
     r = client.post("/investigations", json={"question": "Checkout is slow since 10:04", "agent_id": demo_agent["id"]})
     assert r.status_code == 201

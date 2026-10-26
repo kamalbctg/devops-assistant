@@ -35,7 +35,8 @@ NOTES = """{what}
   eviction — usually not a crash), 1 = application error (read the previous container's logs), 0 = completed.
 - logs_search: pod logs straight from Kubernetes (all matching pods, unhealthy first; after a restart the
   previous container's last lines too — that is where a crash's cause is). Query: text, case-insensitive;
-  'a OR b' for either. Empty query = all lines.
+  'a OR b' for either. Empty query = all lines. level=error (or warn) keeps only lines with that level
+  word or an exception, so search the error itself instead of the word "error".
 - deploys_list: rollouts (image tag, time, previous tag) in the window, plus the version running now.
 - k8s_events: events for the deployment, its ReplicaSets and pods (OOMKilled, BackOff, Killing, Unhealthy,
   FailedScheduling, FailedMount, Evicted) with counts and first time. Events are kept ~1 hour by the cluster.
@@ -52,6 +53,9 @@ def _has(labels: dict | None, want: dict) -> bool:
 
 
 _TS_FRACTION = re.compile(r"(\.\d{6})\d+")
+# level=error / warn: a level word in the line (Java/Python/Go formats) or an exception name
+LOG_LEVEL = {"error": re.compile(r"\b(ERROR|FATAL|CRITICAL|SEVERE|PANIC)\b|Exception|Traceback"),
+             "warn": re.compile(r"\b(WARN|WARNING|ERROR|FATAL|CRITICAL|SEVERE|PANIC)\b|Exception|Traceback")}
 _NOISE = re.compile(r"[0-9a-f]{8}-[0-9a-f-]{27}|0x[0-9a-f]+|\d+", re.I)
 
 
@@ -206,7 +210,8 @@ class Kubernetes(Connector):
             return f"kubectl -n {ns} get pods -l {sel} -o wide; kubectl -n {ns} get deployment/{name} hpa"
         if capability == "logs.search":
             q = args.get("query") or ""
-            return f"kubectl -n {ns} logs -l {sel} --timestamps --since=<window>" + (f" | grep -i '{q}'" if q else "") + \
+            lvl = f" | grep -E '{LOG_LEVEL[args['level']].pattern}'" if args.get("level") else ""
+            return f"kubectl -n {ns} logs -l {sel} --timestamps --since=<window>" + (f" | grep -i '{q}'" if q else "") + lvl + \
                 " (+ --previous for restarted pods)"
         return f"kubectl -n {ns} get events | grep {name}"
 
@@ -242,7 +247,7 @@ class Kubernetes(Connector):
         if capability == "k8s.pods":
             return self._pods(ns, s, deployment, start)
         if capability == "logs.search":
-            return self._logs(ns, s, deployment, start, end, args.get("query") or "")
+            return self._logs(ns, s, deployment, start, end, args.get("query") or "", args.get("level"))
         return self._events(ns, s, deployment, start)
 
     # ------------------------------------------------------------ capabilities
@@ -322,7 +327,7 @@ class Kubernetes(Connector):
         return {"min": h.spec.min_replicas, "max": h.spec.max_replicas,
                 "current": h.status.current_replicas, "desired": h.status.desired_replicas}
 
-    def _logs(self, ns, service, deployment, start, end, query):
+    def _logs(self, ns, service, deployment, start, end, query, level=None):
         core = self.clients().core
         pods = self._pods(ns, service, deployment, start)["pods"][:MAX_LOG_PODS]  # unhealthy first
         terms = [t.strip().lower() for t in re.split(r"\s+OR\s+", query) if t.strip()]
@@ -343,6 +348,8 @@ class Kubernetes(Connector):
                     if ts is not None and not (start <= ts <= end) and not label:
                         continue
                     if terms and not any(t in raw.lower() for t in terms):
+                        continue
+                    if level and not LOG_LEVEL[level].search(raw):
                         continue
                     matches.append((ts, label + msg))
         groups, examples = Counter(), {}
