@@ -270,7 +270,7 @@ Rules enforced in code, not in the prompt:
 ## Directory layout (Maven style)
 
 ```
-incident-agent/
+application/
 ├── pyproject.toml                  ≈ pom.xml
 ├── uv.lock
 ├── Dockerfile, docker-compose.yaml

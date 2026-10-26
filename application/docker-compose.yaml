@@ -2,6 +2,9 @@
 # Connectors and agents are created in the UI and stored in Postgres;
 # their secrets are encrypted with CONNECTOR_SECRET_KEY (generated into the
 # appdata volume on first start if not set — keep that volume).
+# Project name stays "incident-agent" after the folder was renamed to application/, so the existing
+# containers and volumes (incident-agent_pgdata, incident-agent_appdata: data + secret key) are kept.
+name: incident-agent
 services:
   postgres:
     image: postgres:17
