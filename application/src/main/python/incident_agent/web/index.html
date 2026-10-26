@@ -106,6 +106,15 @@ textarea { min-height: 80px; resize: vertical; }
 .steps li:last-child { border-bottom: 0; }
 .steps .node { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 .steps .text { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.steps abbr.lbl { text-decoration: underline dotted; cursor: help; }
+.help-q { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--muted); text-decoration: none; vertical-align: 2px; }
+.help-q:hover { color: var(--accent); border-color: var(--accent); }
+.nav-sep { border-top: 1px solid var(--line); margin: 8px 0; }
+.help-toc { margin-bottom: 16px; }
+.help-toc a.chip { text-decoration: none; }
+.help-ex { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 6px 0; overflow-wrap: anywhere; }
+.card > h3 { font-size: 13px; margin: 16px 0 6px; }
 .steps .why { margin-top: 4px; }
 .steps .why summary { cursor: pointer; font-size: 12px; color: var(--accent); }
 .steps .why div { white-space: pre-wrap; font-size: 12px; margin-top: 4px; padding-left: 10px; border-left: 2px solid var(--line); overflow-wrap: anywhere; }
@@ -316,6 +325,7 @@ async function route() {
     return renderConnectors();
   }
   if (parts[0] === "llm") return renderLLM();
+  if (parts[0] === "help") return renderHelp(parts[1]);
   if (parts[0] === "agents") {
     if (parts[1] === "new") return parts[2] ? renderAgentForm(null, parts[2]) : renderAgentTypePicker();
     if (parts[1] && parts[2] === "edit") return renderAgentForm(parts[1]);
@@ -351,7 +361,8 @@ function renderNav() {
   $("nav").innerHTML =
     item("agents", "#/agents", "🤖 Agents", busy || `<span class="cnt">${AGENTS.length}</span>`) +
     item("connectors", "#/connectors", "🔌 Connectors", `<span class="cnt">${CONNECTORS.length}</span>`) +
-    item("llm", "#/llm", "🧠 LLM", LLM.key_set ? '<span class="cnt">✓</span>' : '<span class="cnt warn-t">not set</span>');
+    item("llm", "#/llm", "🧠 LLM", LLM.key_set ? '<span class="cnt">✓</span>' : '<span class="cnt warn-t">not set</span>') +
+    '<div class="nav-sep"></div>' + item("help", "#/help", "❓ Help", "");
 }
 
 // ------------------------------------------------------------------ agents (card view)
@@ -460,6 +471,26 @@ function renderLiveIdle() {
     <div class="hint">No investigation running. Start one above: its steps stream here live.</div>`;
 }
 
+// ------------------------------------------------------------------ help
+
+let HELP = null;
+async function renderHelp(section) {
+  if (HELP === null) {
+    try { HELP = await (await fetch("/help.html")).text(); } catch (e) { HELP = '<div class="empty">Help could not be loaded.</div>'; }
+  }
+  $("main").innerHTML = HELP;
+  const el = section && document.getElementById("help-" + section);
+  if (el) el.scrollIntoView({block: "start"}); else window.scrollTo(0, 0);
+}
+
+// B / H / E labels in step text: a hover hint saying what they are (text is escaped before this runs)
+const LABEL_TIPS = {B: n => `First check ${n}: automatic, before the model starts`,
+                    E: n => `Check ${n}: a query the model chose to test a theory`,
+                    H: n => `Theory ${n}: a suspected cause (open / supported / ruled out)`};
+const labelTips = html => html.replace(/\b([BEH])(\d{1,3})\b/g,
+  (m, k, n) => `<abbr class="lbl" title="${LABEL_TIPS[k](n)}">${m}</abbr>`);
+const helpLink = `<a class="help-q" href="#/help/reading" title="How to read the steps">?</a>`;
+
 // the model's reasoning for an investigate turn (stored with the investigation, masked), collapsed
 const whyHtml = s => ((s.update || {}).reasoning || []).map(r => `<details class="why"><summary>Why${r.model ? ` · ${esc(r.model)}` : ""}</summary><div>${esc(r.text)}</div></details>`).join("");
 // Stop: the current step finishes, then the report is written from what was found so far
@@ -475,7 +506,7 @@ function wireStop(run, id) {
     try { await post(`/investigations/${run.id}/stop`); } catch (e) { alert(e.message); b.disabled = false; b.textContent = "Stop"; }
   };
 }
-const stepLi = s => `<li><span class="node">${esc(s.node)}</span><span class="text">${esc(s.text)}${whyHtml(s)}</span></li>`;
+const stepLi = s => `<li><span class="node">${esc(s.node)}</span><span class="text">${labelTips(esc(s.text))}${whyHtml(s)}</span></li>`;
 
 function renderLive(run) {
   const el = $("live");
@@ -483,7 +514,7 @@ function renderLive(run) {
   const running = run.status === "running", v = run.verdict, c = v && v.conclusion;
   el.innerHTML = `
     <div class="live-head">
-      <div><h2 style="margin:0 0 4px">Current execution ${running ? '<span class="spinner"></span>' : ""}</h2>
+      <div><h2 style="margin:0 0 4px">Current execution ${helpLink} ${running ? '<span class="spinner"></span>' : ""}</h2>
         <div class="q" title="${esc(run.question)}">${esc(runTitle(run.question))}</div>
         <div class="hint" style="margin-top:2px">started ${ago(run.created)}${run.source !== "chat" ? " · from " + esc(run.source) : ""}</div></div>
       <div style="text-align:right">${badge(run.status)}${v ? " " + badge(v.confidence) : ""}
@@ -1111,7 +1142,7 @@ function renderRun(run) {
     ${run.status === "failed" ? `<div class="card ask"><h2>Failed</h2><div class="mono">${esc(run.error)}</div></div>` : ""}
     ${run.verdict ? reportCards(run) : ""}
     <div class="card">
-      <h2>Steps ${running ? '<span class="spinner"></span>' : ""}</h2>
+      <h2>Steps ${helpLink} ${running ? '<span class="spinner"></span>' : ""}</h2>
       <ul class="steps" id="steps">${run.events.map(stepLi).join("")}</ul>
       ${!run.events.length ? `<div class="hint">${running ? "Starting…" : "No steps finished yet."}</div>` : ""}
     </div>

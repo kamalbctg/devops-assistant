@@ -1,0 +1,111 @@
+<!-- Help page body: loaded into the UI at #/help. Keep it in step with "Reading an investigation" in README.md. -->
+<h1>Help</h1>
+<div class="sub">How to read an investigation, and what the controls do.</div>
+<div class="chips help-toc">
+  <a class="chip" href="#/help/reading">Reading an investigation</a>
+  <a class="chip" href="#/help/status">Theory status</a>
+  <a class="chip" href="#/help/steps">Steps</a>
+  <a class="chip" href="#/help/controls">Controls</a>
+  <a class="chip" href="#/help/report">The report</a>
+</div>
+
+<div class="card" id="help-reading">
+  <h2>Reading an investigation</h2>
+  <p>The <b>Steps</b> list shows what the agent did, one row per step. Three kinds of labels appear in it:</p>
+  <table>
+    <thead><tr><th>Label</th><th>Stands for</th><th>What it is</th><th>Made by</th></tr></thead>
+    <tbody>
+      <tr><td class="nw mono">B1, B2, …</td><td><b>B</b>aseline (first check)</td><td>Automatic checks before the model starts: alerts, metrics, traces, logs, pods and deploys of the affected services</td><td>harness</td></tr>
+      <tr><td class="nw mono">H1, H2, …</td><td><b>H</b>ypothesis (theory)</td><td>A suspected cause the model writes down</td><td>LLM</td></tr>
+      <tr><td class="nw mono">E23, E24, …</td><td><b>E</b>vidence (check)</td><td>One query the model chose, to test a theory</td><td>LLM</td></tr>
+    </tbody>
+  </table>
+  <p class="hint">Evidence numbers continue after the first checks: with 22 B checks, the model's first check is E23.</p>
+
+  <h3>A theory line</h3>
+  <div class="mono help-ex">H1 [open] Brief 5xx spike at 06:45 on both gateways comes from agent-call-cmd-service …</div>
+  <p>"Theory 1: the 5xx spike comes from <span class="mono">agent-call-cmd-service</span>." The word in brackets is its <a href="#/help/status">status</a>.</p>
+
+  <h3>An evidence line, read left to right</h3>
+  <div class="mono help-ex">E34 traces.search [H1] via verbex-datadog: 2203 spans · … 4× 500 PATCH /v1/phone-numbers/{id}</div>
+  <table>
+    <tbody>
+      <tr><td class="nw mono">E34</td><td>check number 34</td></tr>
+      <tr><td class="nw mono">traces.search</td><td>the kind of query: <span class="mono">logs.search</span>, <span class="mono">metrics.query</span>, <span class="mono">traces.search</span>, <span class="mono">k8s.pods</span>, <span class="mono">k8s.events</span>, <span class="mono">deploys.list</span>, <span class="mono">alerts.list</span></td></tr>
+      <tr><td class="nw mono">[H1]</td><td>the theory this check tests (B checks have none)</td></tr>
+      <tr><td class="nw mono">via verbex-datadog</td><td>the connector that answered</td></tr>
+      <tr><td class="nw">after the colon</td><td>the result, as one summary line (personal data masked)</td></tr>
+    </tbody>
+  </table>
+
+  <h3>How they fit together</h3>
+  <ol>
+    <li>The <b>B</b> checks show what looks wrong, e.g. "both gateways have 5xx errors".</li>
+    <li>The model writes <b>H</b> theories to explain it.</li>
+    <li>It runs <b>E</b> checks to test them, at most 2 per turn.</li>
+    <li>It marks a theory supported or ruled out and finishes. The report cites the B and E numbers behind the
+      conclusion, so each claim can be looked up in the steps.</li>
+  </ol>
+  <p class="hint">Hover a B, H or E label in the steps to see what it is.</p>
+</div>
+
+<div class="card" id="help-status">
+  <h2>Theory status</h2>
+  <table>
+    <tbody>
+      <tr><td class="nw"><span class="badge b-open">open</span></td><td>Still being checked.</td></tr>
+      <tr><td class="nw"><span class="badge b-supported">supported</span></td><td>The evidence confirms it: the likely cause.</td></tr>
+      <tr><td class="nw"><span class="badge b-ruled_out">ruled out</span></td><td>The evidence contradicts it: not the cause.</td></tr>
+    </tbody>
+  </table>
+  <p>The final confidence (<span class="badge b-HIGH">high</span> <span class="badge b-MEDIUM">medium</span>
+    <span class="badge b-LOW">low</span>) is checked in code: a root cause needs at least 2 different kinds of evidence
+    (for example traces and logs), and a missing connector caps it at medium.</p>
+</div>
+
+<div class="card" id="help-steps">
+  <h2>Steps</h2>
+  <table>
+    <tbody>
+      <tr><td class="nw mono">connect</td><td>The model and the connectors this run uses (each connector is tested first).</td></tr>
+      <tr><td class="nw mono">intake</td><td>What the question is about: service, symptom, time window; for an alert link, the monitor and its environment.</td></tr>
+      <tr><td class="nw mono">baseline_query</td><td>One first check (B). They run in parallel: every connector, every signal.</td></tr>
+      <tr><td class="nw mono">triage</td><td>Which service looks affected, and why.</td></tr>
+      <tr><td class="nw mono">investigate</td><td>One turn of the model: new theories, its checks (E) and their results, theory status changes.</td></tr>
+      <tr><td class="nw mono">verify</td><td>Code checks the conclusion: cited evidence exists, enough kinds of evidence, confidence.</td></tr>
+      <tr><td class="nw mono">analyze</td><td>Fills the agent's analysis fields (if it has any).</td></tr>
+      <tr><td class="nw mono">report</td><td>The report is written.</td></tr>
+      <tr><td class="nw mono">stop</td><td>Someone pressed Stop.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card" id="help-controls">
+  <h2>Controls</h2>
+  <table>
+    <tbody>
+      <tr><td class="nw">▸ Why</td><td>Under an <span class="mono">investigate</span> step: the model's own reasoning for that turn (a summary,
+        personal data masked). It is stored with the investigation and deleted with it.</td></tr>
+      <tr><td class="nw mono">note:</td><td>Feedback from the code to the model, e.g. a repeated query that was skipped, or a finish that was
+        rejected because it had too little evidence.</td></tr>
+      <tr><td class="nw">Stop</td><td>The current step finishes (a model call can take up to a minute), then the report is written from
+        the evidence found so far.</td></tr>
+      <tr><td class="nw">One at a time</td><td>Each agent runs one investigation at a time. Starting another, or an alert for the same agent,
+        is refused until it finishes or is stopped. Anyone opening the agent's page sees the running one live.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card" id="help-report">
+  <h2>The report</h2>
+  <ol>
+    <li><b>Root Cause</b>: the cause, the theory behind it, and the evidence that supports it.</li>
+    <li><b>Impact</b>: affected service, user-visible effect, active alerts, other services that look unusual.</li>
+    <li><b>Summary</b>: a short explanation and a timeline built from the evidence.</li>
+    <li><b>Evidence</b>: every check with its result; ★ marks the evidence cited for the cause.</li>
+    <li><b>Recommendations</b>: next steps. The agent never changes anything.</li>
+    <li><b>Investigation Coverage</b>: what was checked, with which connector, and what wasn't.</li>
+    <li><b>Confidence &amp; Limitations</b>: why the confidence is what it is, and what could make the conclusion wrong.</li>
+  </ol>
+  <p class="hint">A focused question ("show the logs of X") ends with an Answer instead of a Root Cause.</p>
+</div>

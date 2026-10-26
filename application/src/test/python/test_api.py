@@ -255,6 +255,13 @@ def test_web_ui_served(client):
     assert r.status_code == 200 and "DevOps Agents" in r.text
 
 
+def test_help_page_served(client):
+    r = client.get("/help.html")
+    assert r.status_code == 200 and 'id="help-reading"' in r.text and "aseline (first check)" in r.text
+    ui = client.get("/").text
+    assert "#/help" in ui and "labelTips" in ui  # nav item and hover hints on step labels
+
+
 def test_agent_types_and_per_agent_runs(client, demo_agent):
     types = client.get("/agent-types").json()
     assert [t["type"] for t in types] == ["incident_investigation"]

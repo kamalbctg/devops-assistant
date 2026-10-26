@@ -192,6 +192,79 @@ Everything in the UI is also an API (`/docs`):
 | `/investigations` | Start (`{question, agent_id}`), list and get investigations |
 | `/investigations/{id}/stream` | Live steps (server-sent events) |
 | `/investigations/{id}/resume` | Answer a paused investigation (not used by the incident agent today) |
+| `/investigations/{id}/stop` | Stop a running investigation; the report is written from what was found |
+
+## Reading an investigation
+
+The **Steps** list shows what the agent did, one row per step. Three kinds of
+labels appear in it:
+
+| Label | Stands for | What it is | Made by |
+|---|---|---|---|
+| **B1, B2, …** | **B**aseline (first check) | Automatic checks before the model starts: alerts, metrics, traces, logs, pods and deploys of the affected services | harness |
+| **H1, H2, …** | **H**ypothesis (theory) | A suspected cause the model writes down | LLM |
+| **E23, E24, …** | **E**vidence (check) | One query the model chose, to test a theory | LLM |
+
+Evidence numbers continue after the first checks: with 22 B checks, the model's
+first check is E23.
+
+**A theory line**
+
+```
+H1 [open] Brief 5xx spike at 06:45 on both gateways comes from agent-call-cmd-service …
+```
+
+"Theory 1: the 5xx spike comes from `agent-call-cmd-service`." The status in brackets:
+
+- `[open]`: still being checked
+- `[supported]`: the evidence confirms it, so it is the likely cause
+- `[ruled_out]`: the evidence contradicts it
+
+**An evidence line**, read left to right:
+
+```
+E34 traces.search [H1] via verbex-datadog: 2203 spans · … 4× 500 PATCH /v1/phone-numbers/{id}
+```
+
+| Part | Meaning |
+|---|---|
+| `E34` | check number 34 |
+| `traces.search` | the kind of query: `logs.search`, `metrics.query`, `traces.search`, `k8s.pods`, `k8s.events`, `deploys.list`, `alerts.list` |
+| `[H1]` | the theory this check tests (B checks have none) |
+| `via verbex-datadog` | the connector that answered |
+| after the colon | the result, as one summary line (personal data masked) |
+
+**How they fit together**
+
+1. The **B** checks show what looks wrong (for example "both gateways have 5xx errors").
+2. The model writes **H** theories to explain it.
+3. It runs **E** checks to test them, at most 2 per turn.
+4. It marks a theory `[supported]` or `[ruled_out]` and finishes. The report
+   cites the B and E numbers behind the conclusion, so each claim can be looked
+   up in the steps.
+
+**Other rows and controls**
+
+- `▸ Why · <model>` under an `investigate` row: the model's own reasoning for
+  that turn (a summary, personal data masked). It is stored with the
+  investigation and deleted with it.
+- `note:` lines: feedback from the code to the model, for example a repeated
+  query that was skipped or a `finish` that was rejected.
+- **Stop** (while running): the current step finishes, then the report is
+  written from the evidence so far ("stop: stopped by user").
+- One investigation per agent runs at a time. Starting another, or an alert for
+  the same agent, is refused until it finishes or is stopped.
+
+**Query details the model can use**
+
+- Time window: for an alert, the model may narrow `since`/`until` (HH:MM on the
+  agent's clock) around a spike; queries never leave the alert's window.
+- Log search: all words must match; `a OR b` for either; `"quotes"` for a
+  phrase. `level=error` (or `warn`) keeps only error lines.
+- Datadog service names: when a service's APM name differs from its Kubernetes
+  container name (e.g. `call-cmd-service` vs `agent-call-cmd-service`), the
+  Datadog connector learns the pair from the traces and uses the right name in
+  each place. The steps always show the common name.
 
 ## The report
 

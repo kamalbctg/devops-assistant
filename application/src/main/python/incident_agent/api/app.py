@@ -93,6 +93,10 @@ def create_app(store: Store | None = None, box: SecretBox | None = None,
     def ui():
         return FileResponse(Path(__file__).parent.parent / "web" / "index.html")
 
+    @app.get("/help.html", include_in_schema=False)
+    def help_page():
+        return FileResponse(Path(__file__).parent.parent / "web" / "help.html")
+
     @app.get("/healthz")
     def healthz():
         return {"ok": True, "agents": len(store.list_agents()), "connectors": len(store.list_connectors())}
