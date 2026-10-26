@@ -1,0 +1,67 @@
+name: Preview Build
+run-name: Preview Build - PR #${{ github.event.pull_request.number }}
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+    branches:
+      - '**'  # Explicitly run on all branches including main
+    paths-ignore:     # Optional: skip for doc-only changes
+      - '**.md'
+      - '.gitignore'
+      - 'documents/**'
+      - 'application/docker-compose.yaml'
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting PR comments
+  id-token: write       # required for Workload Identity Federation in docker-image-gcr
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Preview Build
+    env:
+      DD_ENV: stage
+
+    steps:
+      # Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Environment Variables
+        id: env-var
+        uses: verbex-ai/private-github-actions/actions/build/env-var@master
+        with:
+          environment: preview
+          snapshot: true
+          version-strategy: toml
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.11"
+
+      - name: Run Unit Tests
+        id: compile-test
+        working-directory: application
+        run: uv run --frozen pytest -q
+
+      - name: Build Docker Image
+        id: build-docker-image
+        uses: verbex-ai/private-github-actions/actions/build/docker-image-gcr@master
+        with:
+          module: "application"
+          push: false
+
+      - name: Preview Summary
+        if: always()
+        uses: verbex-ai/private-github-actions/actions/build/build-summary@master
+        with:
+          summary-title: "🔍 Preview Build Summary"
+          test-outcome: ${{ steps.compile-test.outcome }}
+          build-steps: |
+            [
+              {"id": "build-docker-image", "name": "Ops Crew Image", "outcome": "${{ steps.build-docker-image.outcome }}", "pushed": "${{ steps.build-docker-image.outputs.pushed }}"}
+            ]

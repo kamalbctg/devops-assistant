@@ -1,0 +1,70 @@
+name: Production Release
+run-name: Production Release - ${{ github.ref_name }}
+on:
+  # Trigger: Release & Hotfix Deployment (merged PRs to main)
+  pull_request:
+    types:
+      - closed        # Only when PR is closed
+    branches:
+      - main          # Only PRs to main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Production Release Build
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      (startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'hotfix/'))
+    permissions:
+      id-token: write   # required for Workload Identity Federation in docker-image-gcr
+      contents: read
+    env:
+      DD_ENV: production
+    steps:
+      # Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Environment Variables
+        id: env-var
+        uses: verbex-ai/private-github-actions/actions/build/env-var@master
+        with:
+          environment: production
+          snapshot: false
+          detect-deploy-type: true
+          version-strategy: toml
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.11"
+
+      - name: Run Unit Tests
+        id: compile-test
+        working-directory: application
+        run: uv run --frozen pytest -q
+
+      - name: Build & Push Ops Crew Docker Image
+        id: build-app
+        uses: verbex-ai/private-github-actions/actions/build/docker-image-gcr@master
+        with:
+          module: application
+
+      - name: Production Deployment Summary
+        if: always()
+        uses: verbex-ai/private-github-actions/actions/build/build-summary@master
+        with:
+          summary-title: "🚀 Production Deployment Summary"
+          test-outcome: ${{ steps.compile-test.outcome }}
+          build-steps: |
+            [
+              {"id": "build-app", "name": "Ops Crew Image", "outcome": "${{ steps.build-app.outcome }}", "pushed": "${{ steps.build-app.outputs.pushed }}"}
+            ]
+          show-pr-info: false
+          additional-info: |
+            - **Environment**: Production
+            - **Deployment Type**: ${{ steps.env-var.outputs.deploy-type }}
+            - **Source**: ${{ steps.env-var.outputs.deploy-source }}
+            - **Branch**: ${{ github.ref_name }}
+            - **Version**: ${{ steps.env-var.outputs.version }}

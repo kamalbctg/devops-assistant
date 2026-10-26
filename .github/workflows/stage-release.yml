@@ -1,0 +1,70 @@
+name: Stage Release
+run-name: Stage Release - ${{ github.ref_name }}
+on:
+  # Trigger: Release Branch Testing
+  push:
+    branches:
+      - 'release/*'   # Any branch starting with release/
+    tags-ignore:
+      - 'v*.*.*'      # Ignore final version tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Stage Release Build
+    if: |
+      github.event_name == 'push' && startsWith(github.ref, 'refs/heads/release/')
+    permissions:
+      id-token: write   # required for Workload Identity Federation in docker-image-gcr
+      contents: read
+    env:
+      DD_ENV: staging
+    steps:
+      # Checkout Code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Environment Variables
+        id: env-var
+        uses: verbex-ai/private-github-actions/actions/build/env-var@master
+        with:
+          environment: stage
+          snapshot: true
+          detect-deploy-type: true
+          version-strategy: toml
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.11"
+
+      - name: Run Unit Tests
+        id: compile-test
+        working-directory: application
+        run: uv run --frozen pytest -q
+
+      - name: Build & Push Ops Crew Docker Image
+        id: build-app
+        uses: verbex-ai/private-github-actions/actions/build/docker-image-gcr@master
+        with:
+          module: application
+
+      - name: Stage Deployment Summary
+        if: always()
+        uses: verbex-ai/private-github-actions/actions/build/build-summary@master
+        with:
+          summary-title: "🎯 Stage Deployment Summary"
+          test-outcome: ${{ steps.compile-test.outcome }}
+          build-steps: |
+            [
+              {"id": "build-app", "name": "Ops Crew Image", "outcome": "${{ steps.build-app.outcome }}", "pushed": "${{ steps.build-app.outputs.pushed }}"}
+            ]
+          show-pr-info: false
+          additional-info: |
+            - **Environment**: Stage
+            - **Deployment Type**: ${{ steps.env-var.outputs.deploy-type }}
+            - **Source**: ${{ steps.env-var.outputs.deploy-source }}
+            - **Branch**: ${{ github.ref_name }}
+            - **Version**: ${{ steps.env-var.outputs.version }}

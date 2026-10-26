@@ -1,0 +1,64 @@
+name: Sync Updates
+run-name: Sync Updates - ${{ github.ref_name }}
+on:
+  # Trigger: After successful production deployment
+  workflow_run:
+    workflows: ["Production Release"]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  sync-to-development:
+    runs-on: ubuntu-latest
+    name: Sync to Development
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch != null &&
+      (startsWith(github.event.workflow_run.head_branch, 'hotfix/') || 
+       startsWith(github.event.workflow_run.head_branch, 'release/'))
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync Branch to Development
+        id: sync
+        uses: verbex-ai/private-github-actions/actions/repo-management/branch-sync@master
+        with:
+          source_branch: ${{ github.event.workflow_run.head_branch }}
+          target_branches: development
+          commit_message_prefix: ${{ startsWith(github.event.workflow_run.head_branch, 'hotfix/') && 'Hotfix sync' || 'Release sync' }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync Summary
+        run: |
+          echo "🔄 Branch sync completed"
+          echo "- Source: ${{ github.event.workflow_run.head_branch }}"
+          echo "- Target: development"
+          echo "- Trigger: Production deployment success"
+          echo "- Results: ${{ steps.sync.outputs.sync_summary }}"
+          echo ""
+          
+          if [[ "${{ steps.sync.outputs.synced_branches }}" != "" ]]; then
+            echo "✅ Successfully synced: ${{ steps.sync.outputs.synced_branches }}"
+          fi
+          
+          if [[ "${{ steps.sync.outputs.up_to_date_branches }}" != "" ]]; then
+            echo "⏭️  Already up to date: ${{ steps.sync.outputs.up_to_date_branches }}"
+          fi
+          
+          if [[ "${{ steps.sync.outputs.skipped_branches }}" != "" ]]; then
+            echo "⚠️  Skipped (conflicts): ${{ steps.sync.outputs.skipped_branches }}"
+          fi
+          
+          if [[ "${{ github.event.workflow_run.head_branch }}" =~ ^hotfix/ ]]; then
+            echo "- Type: Hotfix sync"
+            echo "- Purpose: Keep development in sync with production hotfix"
+          elif [[ "${{ github.event.workflow_run.head_branch }}" =~ ^release/ ]]; then
+            echo "- Type: Release sync"
+            echo "- Purpose: Sync any last-minute release changes to development"
+          fi
