@@ -19,7 +19,7 @@ services:
       timeout: 3s
       retries: 30
   api:
-    build: .
+    build: { context: .., dockerfile: application/Dockerfile }   # same context as CI
     ports: ["127.0.0.1:${HOST_PORT:-8099}:8080"]   # localhost only: no user accounts yet
     depends_on:
       postgres:

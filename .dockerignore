@@ -1,0 +1,14 @@
+.git
+.github
+documents
+incident-agent
+**/.venv
+**/.idea
+**/.DS_Store
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.data
+**/*.sqlite
+**/secret.key
+application/src/test
